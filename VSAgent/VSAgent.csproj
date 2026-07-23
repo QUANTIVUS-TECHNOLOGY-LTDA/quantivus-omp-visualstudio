@@ -28,7 +28,7 @@
     <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.14.40265" />
     <PackageReference Include="Microsoft.VisualStudio.Shell.Framework" Version="17.14.40264" />
     <PackageReference Include="Microsoft.VisualStudio.Shell.15.0" Version="17.14.40264" />
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="System.Net.Http" Version="4.3.4" />
   </ItemGroup>
 
