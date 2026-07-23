@@ -32,14 +32,14 @@ jobs:
           exit $LASTEXITCODE
       - name: Upload build log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: msbuild-log
           path: artifacts/msbuild.log
           if-no-files-found: error
       - name: Upload VSIX
         if: steps.build.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: quantivus-omp-vsix
           path: |
@@ -48,7 +48,7 @@ jobs:
           if-no-files-found: error
       - name: Upload MCP host
         if: steps.build.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: visual-studio-mcp-host
           path: |
