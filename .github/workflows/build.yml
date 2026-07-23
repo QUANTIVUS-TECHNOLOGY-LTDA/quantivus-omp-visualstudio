@@ -1,0 +1,61 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+      - name: Restore and build
+        id: build
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          msbuild VSAgent.sln /restore /m /p:Configuration=Release /p:ContinuousIntegrationBuild=true /fl /flp:"logfile=artifacts/msbuild.log;verbosity=diagnostic"
+          exit $LASTEXITCODE
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: msbuild-log
+          path: artifacts/msbuild.log
+          if-no-files-found: error
+      - name: Upload VSIX
+        if: steps.build.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: quantivus-omp-vsix
+          path: |
+            **/bin/Release/**/*.vsix
+            **/obj/Release/**/*.vsix
+          if-no-files-found: error
+      - name: Upload MCP host
+        if: steps.build.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-studio-mcp-host
+          path: |
+            VSAgent.McpHost/bin/Release/**
+            VSAgent/obj/McpHost/**
+          if-no-files-found: warn
+      - name: Fail when build failed
+        if: steps.build.outcome == 'failure'
+        shell: pwsh
+        run: exit 1
