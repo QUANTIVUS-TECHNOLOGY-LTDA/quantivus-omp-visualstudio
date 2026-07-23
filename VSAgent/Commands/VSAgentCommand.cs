@@ -34,7 +34,7 @@ namespace VSAgent.Commands
             ThreadHelper.ThrowIfNotOnUIThread();
             var window = package.FindToolWindow(typeof(VSAgentToolWindow), 0, true);
             if (window?.Frame == null) throw new NotSupportedException("Cannot create tool window");
-            ErrorHandler.ThrowOnFailure(((IVsWindowFrame)window.Frame).Show());
+            Microsoft.VisualStudio.ErrorHandler.ThrowOnFailure(((IVsWindowFrame)window.Frame).Show());
         }
     }
 }
