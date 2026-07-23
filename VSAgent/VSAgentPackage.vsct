@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+
+  <Extern href="stdidcmd.h"/>
+  <Extern href="vsshlids.h"/>
+
+  <Commands package="guidVSAgentPackage">
+    <Groups>
+      <Group guid="guidVSAgentPackageCmdSet" id="MyMenuGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_VIEW"/>
+      </Group>
+      <Group guid="guidVSAgentPackageCmdSet" id="CodeContextMenuGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_CODEWIN"/>
+      </Group>
+    </Groups>
+
+    <Buttons>
+      <Button guid="guidVSAgentPackageCmdSet" id="VSAgentCommandId" priority="0x0100" type="Button">
+        <Parent guid="guidVSAgentPackageCmdSet" id="MyMenuGroup" />
+        <Strings><ButtonText>Quantivus OMP</ButtonText></Strings>
+      </Button>
+      <Button guid="guidVSAgentPackageCmdSet" id="ExplainCodeCommandId" priority="0x0100" type="Button">
+        <Parent guid="guidVSAgentPackageCmdSet" id="CodeContextMenuGroup" />
+        <Strings><ButtonText>Explain with OMP</ButtonText></Strings>
+      </Button>
+      <Button guid="guidVSAgentPackageCmdSet" id="RefactorCodeCommandId" priority="0x0101" type="Button">
+        <Parent guid="guidVSAgentPackageCmdSet" id="CodeContextMenuGroup" />
+        <Strings><ButtonText>Refactor with OMP</ButtonText></Strings>
+      </Button>
+      <Button guid="guidVSAgentPackageCmdSet" id="GenerateTestsCommandId" priority="0x0102" type="Button">
+        <Parent guid="guidVSAgentPackageCmdSet" id="CodeContextMenuGroup" />
+        <Strings><ButtonText>Generate Tests with OMP</ButtonText></Strings>
+      </Button>
+    </Buttons>
+  </Commands>
+
+  <Symbols>
+    <GuidSymbol name="guidVSAgentPackage" value="{41f0c0d8-5c2b-4f02-8c7e-0b3d3b6e1a2f}" />
+    <GuidSymbol name="guidVSAgentPackageCmdSet" value="{85d7e8c0-5c8f-4d02-8c7e-0b3d3b6e1a2f}">
+      <IDSymbol name="MyMenuGroup" value="0x1020" />
+      <IDSymbol name="CodeContextMenuGroup" value="0x1021" />
+      <IDSymbol name="VSAgentCommandId" value="0x0100" />
+      <IDSymbol name="ExplainCodeCommandId" value="0x0101" />
+      <IDSymbol name="RefactorCodeCommandId" value="0x0102" />
+      <IDSymbol name="GenerateTestsCommandId" value="0x0103" />
+    </GuidSymbol>
+  </Symbols>
+</CommandTable>
