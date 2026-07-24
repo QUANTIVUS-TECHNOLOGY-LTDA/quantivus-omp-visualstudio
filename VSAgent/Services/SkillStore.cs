@@ -113,7 +113,7 @@ namespace VSAgent.Services
             }
         }
 
-        private void Load()
+        public void Load()
         {
             if (!File.Exists(filePath)) return;
             try

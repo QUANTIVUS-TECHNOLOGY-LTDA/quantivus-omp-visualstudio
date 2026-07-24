@@ -30,6 +30,7 @@ namespace VSAgent.Services.Omp
 
         public event EventHandler<string> StatusChanged;
         public event EventHandler<string> TextReceived;
+        public event EventHandler<AcpToolCall> ToolCallReceived;
 
         public bool AutoApproveReadOnly { get; set; } = true;
 
@@ -395,16 +396,59 @@ namespace VSAgent.Services.Omp
             else if (string.Equals(type, "tool_call", StringComparison.OrdinalIgnoreCase) ||
                      string.Equals(type, "tool_call_update", StringComparison.OrdinalIgnoreCase))
             {
-                var title = update?["title"]?.Value<string>() ?? update?["toolCallId"]?.Value<string>();
-                if (!string.IsNullOrWhiteSpace(title))
+                var call = ParseToolCall(update);
+                if (call != null)
                 {
-                    // omp packs the tool source into "title". Keep only the first
-                    // line and cap length so the status bar stays readable.
-                    var firstLine = title.Split(new[] { '\r', '\n' }, 2, StringSplitOptions.RemoveEmptyEntries)[0].Trim();
+                    var firstLine = call.Preview;
                     if (firstLine.Length > 80) firstLine = firstLine.Substring(0, 77) + "...";
                     OnStatusChanged("Tool: " + firstLine);
+                    ToolCallReceived?.Invoke(this, call);
                 }
             }
+        }
+
+        private static AcpToolCall ParseToolCall(JToken update)
+        {
+            if (update == null) return null;
+            var id = update["toolCallId"]?.Value<string>() ?? update["id"]?.Value<string>();
+            var title = update["title"]?.Value<string>();
+            var rawName = update["rawInput"]?["name"]?.Value<string>()
+                ?? update["name"]?.Value<string>();
+            var status = update["status"]?.Value<string>() ?? "running";
+            var kind = update["kind"]?.Value<string>() ?? GuessKind(rawName);
+            var output = update["output"]?.Value<string>()
+                ?? update["result"]?.Value<string>();
+            var input = new Dictionary<string, object>();
+            var rawInput = update["rawInput"] as JObject ?? update["input"] as JObject;
+            if (rawInput != null)
+            {
+                foreach (var kv in rawInput)
+                {
+                    if (kv.Key == "name") continue;
+                    input[kv.Key] = kv.Value?.ToString();
+                }
+            }
+            return new AcpToolCall
+            {
+                Id = id,
+                Name = rawName,
+                Title = title,
+                Status = status,
+                Kind = kind,
+                Input = input,
+                Output = output,
+                RawTitle = title
+            };
+        }
+
+        private static string GuessKind(string rawName)
+        {
+            if (string.IsNullOrWhiteSpace(rawName)) return "other";
+            rawName = rawName.ToLowerInvariant();
+            if (rawName.Contains("read") || rawName.Contains("view") || rawName.Contains("grep") || rawName.Contains("search")) return "read";
+            if (rawName.Contains("write") || rawName.Contains("edit") || rawName.Contains("create") || rawName.Contains("patch")) return "edit";
+            if (rawName.Contains("exec") || rawName.Contains("run") || rawName.Contains("shell") || rawName.Contains("bash")) return "execute";
+            return "other";
         }
 
         private async Task ReadErrorLoopAsync(CancellationToken cancellationToken)

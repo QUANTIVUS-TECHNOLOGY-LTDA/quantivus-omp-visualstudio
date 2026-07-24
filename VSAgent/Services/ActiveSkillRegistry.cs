@@ -85,7 +85,7 @@ namespace VSAgent.Services
             return sb.ToString();
         }
 
-        private void PruneMissing()
+        public void PruneMissing()
         {
             var ids = store.Snapshot().Select(s => s.Id).ToHashSet();
             lock (sync)

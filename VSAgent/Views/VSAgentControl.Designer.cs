@@ -14,7 +14,6 @@ namespace VSAgent.Views
         private TextBox PromptTextBox;
         private Button SendButton;
         private Button CancelButton;
-        private TextBlock ModelTextBlock;
         private TextBlock TaskTextBlock;
         private TextBlock BranchTextBlock;
         private TextBlock CtxTextBlock;
@@ -22,7 +21,12 @@ namespace VSAgent.Views
         private TabControl MainTabControl;
         private TabItem ChatTab;
         private ScrollViewer ResponseScrollViewer;
+        private StackPanel ChatTranscript;
+        private FlowDocumentScrollViewer LastResponseView;
+
+
         private Border StatusBar;
+
         private Border QueuePanel;
         private TextBlock QueueHeader;
         private StackPanel QueueItemsPanel;
@@ -61,34 +65,25 @@ namespace VSAgent.Views
             ResponseScrollViewer = new ScrollViewer
             {
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Margin = new Thickness(8, 8, 8, 4)
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Margin = new Thickness(8, 8, 8, 4),
+                Background = new SolidColorBrush(Color.FromRgb(0x14, 0x14, 0x18)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0x40, 0x40, 0x45)),
+                BorderThickness = new Thickness(1)
             };
-            ResponseTextBox = new TextBox
-            {
-                Text = string.Empty,
-                IsReadOnly = true,
-                TextWrapping = TextWrapping.Wrap,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                AcceptsReturn = true,
-                BorderThickness = new Thickness(1),
-                Padding = new Thickness(6),
-                FontFamily = new FontFamily("Consolas, Cascadia Mono, Courier New"),
-                FontSize = 12
-            };
-            ResponseTextBox.SetResourceReference(TextBox.BackgroundProperty, VsBrushes.ToolWindowBackgroundKey);
-            ResponseTextBox.SetResourceReference(TextBox.ForegroundProperty, VsBrushes.ToolWindowTextKey);
-            ResponseTextBox.SetResourceReference(TextBox.BorderBrushProperty, VsBrushes.ToolWindowBorderKey);
 
-            // Wrap the response textbox in a grid so the welcome overlay can sit on top.
+            ChatTranscript = new StackPanel { Margin = new Thickness(4) };
+            ResponseScrollViewer.Content = ChatTranscript;
+            Grid.SetRow(ResponseScrollViewer, 0);
+
+            // Welcome overlay sits above the empty transcript
             var responseGrid = new Grid();
-            responseGrid.Children.Add(ResponseTextBox);
+            responseGrid.Children.Add(ResponseScrollViewer);
             WelcomeOverlay = new WelcomeView();
             responseGrid.Children.Add(WelcomeOverlay);
-            ResponseScrollViewer.Content = responseGrid;
-            Grid.SetRow(ResponseScrollViewer, 0);
-            chatGrid.Children.Add(ResponseScrollViewer);
+            chatGrid.Children.Add(responseGrid);
+            Grid.SetRow(responseGrid, 0);
+            ChatTab.Content = chatGrid;
 
             var promptLabel = new TextBlock
             {
@@ -156,7 +151,7 @@ namespace VSAgent.Views
             Grid.SetRow(QueuePanel, 3);
             chatGrid.Children.Add(QueuePanel);
 
-            ChatTab.Content = chatGrid;
+
             MainTabControl.Items.Add(ChatTab);
 
             var historyTab = new TabItem { Header = "History" };
@@ -167,6 +162,14 @@ namespace VSAgent.Views
             HistoryListBox.SelectionChanged += HistoryListBox_SelectionChanged;
             historyTab.Content = HistoryListBox;
             MainTabControl.Items.Add(historyTab);
+
+            var skillsTab = new TabItem { Header = "Skills", Content = new SkillsPlaceholder() };
+            skillsTab.Name = "SkillsTab";
+            MainTabControl.Items.Add(skillsTab);
+
+            var toolsTab = new TabItem { Header = "Tools", Content = new ToolsPlaceholder() };
+            toolsTab.Name = "ToolsTab";
+            MainTabControl.Items.Add(toolsTab);
 
             mainGrid.Children.Add(MainTabControl);
 
@@ -180,32 +183,26 @@ namespace VSAgent.Views
             StatusBar.SetResourceReference(Border.BackgroundProperty, VsBrushes.ToolWindowBackgroundKey);
 
             var footer = new Grid();
-            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-            ModelTextBlock = MakeStatusText("oh-my-pi", FontWeights.SemiBold);
-            ModelTextBlock.Margin = new Thickness(0, 0, 12, 0);
-            Grid.SetColumn(ModelTextBlock, 0);
-            footer.Children.Add(ModelTextBlock);
-
-            TaskTextBlock = MakeStatusText("Initializing...", FontWeights.Normal);
+            TaskTextBlock = MakeStatusText("Idle", FontWeights.SemiBold);
             TaskTextBlock.TextTrimming = TextTrimming.CharacterEllipsis;
-            Grid.SetColumn(TaskTextBlock, 1);
+            Grid.SetColumn(TaskTextBlock, 0);
             footer.Children.Add(TaskTextBlock);
 
             BranchTextBlock = MakeStatusText("", FontWeights.Normal);
             BranchTextBlock.Margin = new Thickness(12, 0, 12, 0);
             BranchTextBlock.HorizontalAlignment = HorizontalAlignment.Right;
-            Grid.SetColumn(BranchTextBlock, 2);
+            Grid.SetColumn(BranchTextBlock, 1);
             footer.Children.Add(BranchTextBlock);
 
             CtxTextBlock = MakeStatusText("ctx: 0.0%/1M", FontWeights.Normal);
             CtxTextBlock.Margin = new Thickness(0, 0, 12, 0);
             CtxTextBlock.HorizontalAlignment = HorizontalAlignment.Right;
-            Grid.SetColumn(CtxTextBlock, 3);
+            Grid.SetColumn(CtxTextBlock, 2);
             footer.Children.Add(CtxTextBlock);
 
             var buttonPanel = new StackPanel
@@ -234,7 +231,7 @@ namespace VSAgent.Views
             CancelButton.Click += CancelButton_Click;
             buttonPanel.Children.Add(CancelButton);
 
-            Grid.SetColumn(buttonPanel, 4);
+            Grid.SetColumn(buttonPanel, 3);
             footer.Children.Add(buttonPanel);
 
             StatusBar.Child = footer;

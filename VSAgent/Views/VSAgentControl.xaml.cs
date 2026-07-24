@@ -2,6 +2,7 @@ using EnvDTE;
 using EnvDTE80;
 using Microsoft.VisualStudio.Shell;
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
@@ -9,10 +10,14 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Media;
 using VSAgent.Models;
 using VSAgent.Services;
+using VSAgent.Services.Omp;
 using VSAgent.Services.VisualStudio;
+using VSAgent.Ui;
 
 namespace VSAgent.Views
 {
@@ -30,7 +35,11 @@ namespace VSAgent.Views
         private bool hostEventsAttached;
         private string currentTask = "Idle";
         private string currentBranch;
-
+        private string currentResponseBuffer = string.Empty;
+        private Border userMessageCard;
+        private Border assistantMessageCard;
+        private FlowDocumentScrollViewer currentResponseView;
+        private readonly Dictionary<string, ToolCallCard> activeToolCards = new Dictionary<string, ToolCallCard>();
         public VSAgentControl()
         {
             InitializeComponent();
@@ -68,6 +77,8 @@ namespace VSAgent.Views
             SetTask("Idle");
             WelcomeOverlay?.Start();
             BuildSettingsTab();
+            BuildSkillsTab();
+            BuildToolsTab();
         }
 
         private void OnUnloaded(object sender, RoutedEventArgs e)
@@ -82,12 +93,25 @@ namespace VSAgent.Views
             try
             {
                 ThreadHelper.ThrowIfNotOnUIThread();
-                settingsView = new SettingsView()
+                settingsView = new SettingsView(
+                    VSAgentPackage.Credentials,
+                    VSAgentPackage.Skills,
+                    VSAgentPackage.ActiveSkills,
+                    VSAgentPackage.WebSearchConfig,
+                    () => VSAgentPackage.Env,
+                    env =>
+                    {
+                        VSAgentPackage.Env = env;
+                        VSAgentPackage.WebSearch.Save(env == null ? VSAgentPackage.WebSearchConfig : ApplyWebSearch(env, VSAgentPackage.WebSearchConfig));
+                        ApplyEnvToHost();
+                    })
                 {
                     Margin = new Thickness(0)
                 };
                 settingsView.SettingsChanged += OnSettingsChanged;
                 var tab = new TabItem { Header = "Settings", Content = settingsView };
+                ReplacePlaceholderTab("SkillsTab", null);
+                ReplacePlaceholderTab("ToolsTab", null);
                 MainTabControl.Items.Add(tab);
             }
             catch (Exception ex)
@@ -96,44 +120,235 @@ namespace VSAgent.Views
             }
         }
 
-        private void OnSettingsChanged(object sender, EventArgs e)
+        private void BuildSkillsTab()
         {
-            // Persist to dialog page on every change
-            try { settingsView?.ApplyToOptions(); } catch { }
-            // Push model + threshold into the running AgentHost
-            try { settingsView?.ApplyToAgentHost(VSAgentPackage.AgentHost); } catch { }
+            try
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                var skillsView = new SkillsView(VSAgentPackage.Skills, VSAgentPackage.ActiveSkills) { Margin = new Thickness(0) };
+                ReplacePlaceholderTab("SkillsTab", skillsView);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("Failed to build skills tab: " + ex);
+            }
         }
 
-        // ---- Host events ----
+        private void BuildToolsTab()
+        {
+            try
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                var toolsView = new CustomToolsView(VSAgentPackage.CustomTools) { Margin = new Thickness(0) };
+                ReplacePlaceholderTab("ToolsTab", toolsView);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("Failed to build tools tab: " + ex);
+            }
+        }
+
+        private void ReplacePlaceholderTab(string name, object newContent)
+        {
+            foreach (var item in MainTabControl.Items)
+            {
+                if (item is TabItem ti && ti.Name == name)
+                {
+                    if (newContent != null) ti.Content = newContent;
+                    else { MainTabControl.Items.Remove(ti); return; }
+                }
+            }
+            if (newContent != null)
+            {
+                var header = name == "SkillsTab" ? "Skills" : "Tools";
+                MainTabControl.Items.Add(new TabItem { Header = header, Content = newContent });
+            }
+        }
+
+        private static WebSearchConfig ApplyWebSearch(OmpEnvironment env, WebSearchConfig current)
+        {
+            current.Provider = env.SearchProvider ?? current.Provider ?? "native";
+            return current;
+        }
+
+        private void ApplyEnvToHost()
+        {
+            try
+            {
+                var host = VSAgentPackage.AgentHost;
+                if (host != null && settingsView != null)
+                {
+                    var env = VSAgentPackage.Env;
+                    host.ModelProvider = env?.ActiveProvider;
+                    host.ModelName = env?.ActiveModel;
+                    host.AutoCompactThresholdPercent = env?.AutoCompactThresholdPercent ?? 0;
+                }
+            }
+            catch { }
+        }
+
         private void AttachHostEvents()
         {
             if (hostEventsAttached || VSAgentPackage.AgentHost == null) return;
-            VSAgentPackage.AgentHost.StatusChanged += AgentHost_StatusChanged;
-            VSAgentPackage.AgentHost.TextReceived += AgentHost_TextReceived;
+            var host = VSAgentPackage.AgentHost;
+            host.StatusChanged += AgentHost_StatusChanged;
+            host.TextReceived += AgentHost_TextReceived;
+            var client = TryGetOmpClient(host);
+            if (client != null) client.ToolCallReceived += AgentHost_ToolCallReceived;
             hostEventsAttached = true;
+        }
+
+        private static OmpAcpClient TryGetOmpClient(AgentHostService host)
+        {
+            try
+            {
+                var f = typeof(AgentHostService).GetField("client", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                return f?.GetValue(host) as OmpAcpClient;
+            }
+            catch { return null; }
         }
 
         private void DetachHostEvents()
         {
             if (!hostEventsAttached || VSAgentPackage.AgentHost == null) return;
-            VSAgentPackage.AgentHost.StatusChanged -= AgentHost_StatusChanged;
-            VSAgentPackage.AgentHost.TextReceived -= AgentHost_TextReceived;
+            var host = VSAgentPackage.AgentHost;
+            host.StatusChanged -= AgentHost_StatusChanged;
+            host.TextReceived -= AgentHost_TextReceived;
+            var client = TryGetOmpClient(host);
+            if (client != null) client.ToolCallReceived -= AgentHost_ToolCallReceived;
             hostEventsAttached = false;
         }
+
+        private void OnSettingsChanged(object sender, EventArgs e)
+        {
+            try { settingsView?.Commit(); } catch { }
+        }
+
+        private void CancelCurrent()
+        {
+            currentCancellationTokenSource?.Cancel();
+            SetTask("Cancelling...");
+        }
+
+        private void CancelButton_Click(object sender, RoutedEventArgs e) => CancelCurrent();
+
+
 
         private void AgentHost_StatusChanged(object sender, string status) =>
             Dispatcher.BeginInvoke(new Action(() => SetTask(status)));
 
         private void AgentHost_TextReceived(object sender, string text)
         {
-            Dispatcher.BeginInvoke(new Action(() =>
+            if (string.IsNullOrEmpty(text)) return;
+            Dispatcher.BeginInvoke(new Action(() => AppendAssistantText(text)));
+        }
+
+        private void AgentHost_ToolCallReceived(object sender, AcpToolCall call)
+        {
+            Dispatcher.BeginInvoke(new Action(() => AddToolCallCard(call)));
+        }
+
+        private void AppendAssistantText(string text)
+        {
+            if (WelcomeOverlay != null && WelcomeOverlay.Visibility != Visibility.Collapsed)
+                WelcomeOverlay.Visibility = Visibility.Collapsed;
+            EnsureAssistantCard();
+            currentResponseBuffer += text;
+            currentResponseView.Document = Markdown.Parse(currentResponseBuffer);
+            ResponseScrollViewer.ScrollToEnd();
+            contextUsage.AddOutput(text);
+            UpdateCtxDisplay();
+        }
+
+        private void AddToolCallCard(AcpToolCall call)
+        {
+            if (WelcomeOverlay != null && WelcomeOverlay.Visibility != Visibility.Collapsed)
+                WelcomeOverlay.Visibility = Visibility.Collapsed;
+            if (string.IsNullOrEmpty(call.Id)) call.Id = Guid.NewGuid().ToString("N");
+            if (activeToolCards.TryGetValue(call.Id, out var existing))
             {
-                if (string.IsNullOrEmpty(text)) return;
-                ResponseTextBox.AppendText(text);
-                ResponseScrollViewer.ScrollToEnd();
-                contextUsage.AddOutput(text);
-                UpdateCtxDisplay();
-            }));
+                existing.Call = call;
+                // Replace the card so the markdown output re-renders
+                int idx = ChatTranscript.Children.IndexOf(existing);
+                if (idx >= 0)
+                {
+                    var fresh = new ToolCallCard(call);
+                    ChatTranscript.Children[idx] = fresh;
+                    activeToolCards[call.Id] = fresh;
+                }
+            }
+            else
+            {
+                var card = new ToolCallCard(call);
+                ChatTranscript.Children.Add(card);
+                activeToolCards[call.Id] = card;
+            }
+            ResponseScrollViewer.ScrollToEnd();
+        }
+
+        private void EnsureAssistantCard()
+        {
+            if (currentResponseView != null) return;
+            var header = new TextBlock
+            {
+                Text = "oh-my-pi",
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(4, 0, 0, 4),
+                Foreground = new SolidColorBrush(Color.FromRgb(0x4F, 0xC3, 0xF7))
+            };
+            currentResponseView = new FlowDocumentScrollViewer
+            {
+                Document = Markdown.Parse(string.Empty),
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(0),
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+            var stack = new StackPanel { Margin = new Thickness(6, 4, 6, 8) };
+            stack.Children.Add(header);
+            stack.Children.Add(currentResponseView);
+            assistantMessageCard = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(0x1F, 0x1F, 0x22)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0x40, 0x40, 0x45)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(4),
+                Margin = new Thickness(6, 4, 6, 4),
+                Child = stack
+            };
+            ChatTranscript.Children.Add(assistantMessageCard);
+        }
+
+        private void BeginUserTurn(string prompt)
+        {
+            userMessageCard = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(0x00, 0x6B, 0xD9)),
+                CornerRadius = new CornerRadius(4),
+                Margin = new Thickness(60, 4, 6, 4),
+                Padding = new Thickness(8, 6, 8, 6),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Child = new TextBlock
+                {
+                    Text = prompt,
+                    Foreground = Brushes.White,
+                    TextWrapping = TextWrapping.Wrap,
+                    FontFamily = new FontFamily("Segoe UI")
+                }
+            };
+            ChatTranscript.Children.Add(userMessageCard);
+            currentResponseBuffer = string.Empty;
+            currentResponseView = null;
+            activeToolCards.Clear();
+        }
+
+        private void ClearTranscript()
+        {
+            ChatTranscript.Children.Clear();
+            currentResponseBuffer = string.Empty;
+            currentResponseView = null;
+            activeToolCards.Clear();
+            if (WelcomeOverlay != null) WelcomeOverlay.Visibility = Visibility.Visible;
         }
 
         // ---- Status bar ----
@@ -170,14 +385,6 @@ namespace VSAgent.Views
         // ---- Send / Cancel ----
         private void SendButton_Click(object sender, RoutedEventArgs e) => _ = SendPromptAsync();
 
-        private void CancelButton_Click(object sender, RoutedEventArgs e) => CancelCurrent();
-
-        private void CancelCurrent()
-        {
-            currentCancellationTokenSource?.Cancel();
-            SetTask("Cancelling...");
-        }
-
         private async Task SendPromptAsync()
         {
             var prompt = PromptTextBox.Text?.Trim();
@@ -194,8 +401,7 @@ namespace VSAgent.Views
             {
                 AttachHostEvents();
                 SetBusyState(true, "oh-my-pi is working...");
-                if (WelcomeOverlay != null) WelcomeOverlay.Visibility = Visibility.Collapsed;
-                ResponseTextBox.Clear();
+                BeginUserTurn(prompt);
                 var context = GetActiveEditorContext();
                 var totalInput = (prompt.Length) + (context?.Length ?? 0);
                 contextUsage.AddInput(prompt);
@@ -230,6 +436,7 @@ namespace VSAgent.Views
                 SetBusyState(false, currentTask);
             }
         }
+
 
         // ---- Keys ----
         private void PromptTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -318,7 +525,7 @@ namespace VSAgent.Views
             switch (cmd.Kind)
             {
                 case SlashCommandKind.LocalClear:
-                    ResponseTextBox.Clear();
+                    ClearTranscript();
                     chatHistory.Clear();
                     contextUsage.Reset();
                     UpdateCtxDisplay();
@@ -569,9 +776,13 @@ namespace VSAgent.Views
         {
             Dispatcher.Invoke(() =>
             {
-                ResponseTextBox.Text = "[" + title + "]" + Environment.NewLine + Environment.NewLine + content;
+                if (WelcomeOverlay != null) WelcomeOverlay.Visibility = Visibility.Collapsed;
+                BeginUserTurn(title);
+                currentResponseBuffer = content ?? string.Empty;
+                EnsureAssistantCard();
+                currentResponseView.Document = Markdown.Parse(content ?? string.Empty);
                 MainTabControl.SelectedItem = ChatTab;
-                ResponseScrollViewer.ScrollToTop();
+                ResponseScrollViewer.ScrollToEnd();
             });
         }
 

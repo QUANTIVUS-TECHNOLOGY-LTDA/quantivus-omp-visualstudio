@@ -35,14 +35,23 @@ namespace VSAgent
 
         internal static SkillStore Skills { get; } = new SkillStore();
         internal static ActiveSkillRegistry ActiveSkills { get; } = new ActiveSkillRegistry(Skills);
+        internal static CredentialStore Credentials { get; } = new CredentialStore();
+        internal static CustomToolStore CustomTools { get; } = new CustomToolStore();
+        internal static WebSearchStore WebSearch { get; } = new WebSearchStore();
+        internal static WebSearchConfig WebSearchConfig { get; private set; }
         internal static AgentHostService AgentHost { get; private set; }
-
+        public static OmpEnvironment Env { get; internal set; } = new OmpEnvironment();
         protected override async Task InitializeAsync(
             CancellationToken cancellationToken,
             IProgress<ServiceProgressData> progress)
         {
             Instance = this;
             PackageServiceProvider = this;
+            Skills.Load();
+            ActiveSkills.PruneMissing();
+            Credentials.Load();
+            CustomTools.Load();
+            WebSearchConfig = WebSearch.Load();
             AgentHost = new AgentHostService();
             try
             {
