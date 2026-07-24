@@ -1,5 +1,10 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Documents;
+using System.Windows.Media;
+using System.Windows.Media.Effects;
+using Microsoft.VisualStudio.Shell;
 
 namespace VSAgent.Views
 {
@@ -9,95 +14,211 @@ namespace VSAgent.Views
         private TextBox PromptTextBox;
         private Button SendButton;
         private Button CancelButton;
-        private TextBlock StatusTextBlock;
+        private TextBlock ModelTextBlock;
+        private TextBlock TaskTextBlock;
+        private TextBlock BranchTextBlock;
+        private TextBlock CtxTextBlock;
         private ListBox HistoryListBox;
         private TabControl MainTabControl;
         private TabItem ChatTab;
         private ScrollViewer ResponseScrollViewer;
+        private Border StatusBar;
+        private Border QueuePanel;
+        private TextBlock QueueHeader;
+        private StackPanel QueueItemsPanel;
+        private WelcomeView WelcomeOverlay;
 
         private void InitializeComponent()
         {
-            Width = 800;
-            Height = 600;
+            MinWidth = 420;
+            MinHeight = 320;
+
+            BuildTabItemStyle();
 
             var mainGrid = new Grid();
             mainGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
             mainGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            mainGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-            MainTabControl = new TabControl();
+            // ---- Tab area: Agent / History ----
+            MainTabControl = new TabControl
+            {
+                Margin = new Thickness(0),
+                Padding = new Thickness(0),
+                BorderThickness = new Thickness(0, 0, 0, 1)
+            };
+            MainTabControl.SetResourceReference(TabControl.BackgroundProperty, VsBrushes.ToolWindowBackgroundKey);
+            MainTabControl.SetResourceReference(TabControl.ForegroundProperty, VsBrushes.ToolWindowTextKey);
+            MainTabControl.SetResourceReference(TabControl.BorderBrushProperty, VsBrushes.ToolWindowBorderKey);
             Grid.SetRow(MainTabControl, 0);
 
             ChatTab = new TabItem { Header = "Agent" };
-            var chatGrid = new Grid();
-            chatGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(2, GridUnitType.Star) });
-            chatGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            var chatGrid = new Grid { Margin = new Thickness(0) };
+            chatGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3, GridUnitType.Star), MinHeight = 120 });
+            chatGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            chatGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star), MinHeight = 80 });
+            chatGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-            ResponseScrollViewer = new ScrollViewer();
+            ResponseScrollViewer = new ScrollViewer
+            {
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Margin = new Thickness(8, 8, 8, 4)
+            };
             ResponseTextBox = new TextBox
             {
-                Text = "Quantivus OMP is loading. Open a solution and ask the agent to build, debug, inspect, or change it.",
+                Text = string.Empty,
                 IsReadOnly = true,
                 TextWrapping = TextWrapping.Wrap,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
                 AcceptsReturn = true,
-                Margin = new Thickness(5)
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(6),
+                FontFamily = new FontFamily("Consolas, Cascadia Mono, Courier New"),
+                FontSize = 12
             };
-            ResponseScrollViewer.Content = ResponseTextBox;
+            ResponseTextBox.SetResourceReference(TextBox.BackgroundProperty, VsBrushes.ToolWindowBackgroundKey);
+            ResponseTextBox.SetResourceReference(TextBox.ForegroundProperty, VsBrushes.ToolWindowTextKey);
+            ResponseTextBox.SetResourceReference(TextBox.BorderBrushProperty, VsBrushes.ToolWindowBorderKey);
+
+            // Wrap the response textbox in a grid so the welcome overlay can sit on top.
+            var responseGrid = new Grid();
+            responseGrid.Children.Add(ResponseTextBox);
+            WelcomeOverlay = new WelcomeView();
+            responseGrid.Children.Add(WelcomeOverlay);
+            ResponseScrollViewer.Content = responseGrid;
             Grid.SetRow(ResponseScrollViewer, 0);
             chatGrid.Children.Add(ResponseScrollViewer);
 
-            var inputGrid = new Grid();
-            inputGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            inputGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-            var promptLabel = new TextBlock { Text = "Ask oh-my-pi:", Margin = new Thickness(5, 5, 5, 0) };
-            Grid.SetRow(promptLabel, 0);
-            inputGrid.Children.Add(promptLabel);
+            var promptLabel = new TextBlock
+            {
+                Text = "Ask oh-my-pi:",
+                Margin = new Thickness(8, 4, 8, 2),
+                FontWeight = FontWeights.SemiBold
+            };
+            promptLabel.SetResourceReference(TextBlock.ForegroundProperty, VsBrushes.ToolWindowTextKey);
+            Grid.SetRow(promptLabel, 1);
+            chatGrid.Children.Add(promptLabel);
 
             PromptTextBox = new TextBox
             {
-                Text = "Describe the task... (Ctrl+Enter to send)",
+                Text = "Describe the task... (Ctrl+Enter to send, type / for commands, Esc to cancel)",
                 AcceptsReturn = true,
                 TextWrapping = TextWrapping.Wrap,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Margin = new Thickness(5)
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Margin = new Thickness(8, 0, 8, 8),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(6),
+                FontSize = 12
             };
-            PromptTextBox.KeyDown += PromptTextBox_KeyDown;
-            Grid.SetRow(PromptTextBox, 1);
-            inputGrid.Children.Add(PromptTextBox);
-            Grid.SetRow(inputGrid, 1);
-            chatGrid.Children.Add(inputGrid);
+            PromptTextBox.SetResourceReference(TextBox.BackgroundProperty, VsBrushes.ToolWindowBackgroundKey);
+            PromptTextBox.SetResourceReference(TextBox.ForegroundProperty, VsBrushes.ToolWindowTextKey);
+            PromptTextBox.SetResourceReference(TextBox.BorderBrushProperty, VsBrushes.ToolWindowBorderKey);
+            Grid.SetRow(PromptTextBox, 2);
+            chatGrid.Children.Add(PromptTextBox);
+
+            // ---- Queue panel ----
+            QueuePanel = new Border
+            {
+                BorderThickness = new Thickness(0, 1, 0, 1),
+                Padding = new Thickness(8, 4, 8, 4),
+                Visibility = Visibility.Collapsed
+            };
+            QueuePanel.SetResourceReference(Border.BorderBrushProperty, VsBrushes.ToolWindowBorderKey);
+            QueuePanel.SetResourceReference(Border.BackgroundProperty, VsBrushes.ToolWindowBackgroundKey);
+
+            var queueRoot = new Grid();
+            queueRoot.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            queueRoot.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star), MaxHeight = 110 });
+
+            QueueHeader = new TextBlock
+            {
+                Text = "Queued follow-up messages",
+                FontWeight = FontWeights.SemiBold,
+                FontSize = 11,
+                Margin = new Thickness(0, 0, 0, 4)
+            };
+            QueueHeader.SetResourceReference(TextBlock.ForegroundProperty, VsBrushes.ToolWindowTextKey);
+            Grid.SetRow(QueueHeader, 0);
+            queueRoot.Children.Add(QueueHeader);
+
+            QueueItemsPanel = new StackPanel { Orientation = Orientation.Vertical };
+            var queueScroller = new ScrollViewer
+            {
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Content = QueueItemsPanel
+            };
+            Grid.SetRow(queueScroller, 1);
+            queueRoot.Children.Add(queueScroller);
+            QueuePanel.Child = queueRoot;
+            Grid.SetRow(QueuePanel, 3);
+            chatGrid.Children.Add(QueuePanel);
+
             ChatTab.Content = chatGrid;
             MainTabControl.Items.Add(ChatTab);
 
             var historyTab = new TabItem { Header = "History" };
-            HistoryListBox = new ListBox { Margin = new Thickness(5) };
+            HistoryListBox = new ListBox { Margin = new Thickness(8) };
+            HistoryListBox.SetResourceReference(ListBox.BackgroundProperty, VsBrushes.ToolWindowBackgroundKey);
+            HistoryListBox.SetResourceReference(ListBox.ForegroundProperty, VsBrushes.ToolWindowTextKey);
+            HistoryListBox.SetResourceReference(ListBox.BorderBrushProperty, VsBrushes.ToolWindowBorderKey);
             HistoryListBox.SelectionChanged += HistoryListBox_SelectionChanged;
             historyTab.Content = HistoryListBox;
             MainTabControl.Items.Add(historyTab);
+
             mainGrid.Children.Add(MainTabControl);
 
-            StatusTextBlock = new TextBlock
+            // ---- Footer ----
+            StatusBar = new Border
             {
-                Text = "Initializing oh-my-pi...",
-                Padding = new Thickness(5, 3, 5, 3),
-                Background = SystemColors.ControlBrush
+                BorderThickness = new Thickness(0, 1, 0, 0),
+                Padding = new Thickness(8, 4, 8, 4)
             };
-            Grid.SetRow(StatusTextBlock, 1);
-            mainGrid.Children.Add(StatusTextBlock);
+            StatusBar.SetResourceReference(Border.BorderBrushProperty, VsBrushes.ToolWindowBorderKey);
+            StatusBar.SetResourceReference(Border.BackgroundProperty, VsBrushes.ToolWindowBackgroundKey);
+
+            var footer = new Grid();
+            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            ModelTextBlock = MakeStatusText("oh-my-pi", FontWeights.SemiBold);
+            ModelTextBlock.Margin = new Thickness(0, 0, 12, 0);
+            Grid.SetColumn(ModelTextBlock, 0);
+            footer.Children.Add(ModelTextBlock);
+
+            TaskTextBlock = MakeStatusText("Initializing...", FontWeights.Normal);
+            TaskTextBlock.TextTrimming = TextTrimming.CharacterEllipsis;
+            Grid.SetColumn(TaskTextBlock, 1);
+            footer.Children.Add(TaskTextBlock);
+
+            BranchTextBlock = MakeStatusText("", FontWeights.Normal);
+            BranchTextBlock.Margin = new Thickness(12, 0, 12, 0);
+            BranchTextBlock.HorizontalAlignment = HorizontalAlignment.Right;
+            Grid.SetColumn(BranchTextBlock, 2);
+            footer.Children.Add(BranchTextBlock);
+
+            CtxTextBlock = MakeStatusText("ctx: 0.0%/1M", FontWeights.Normal);
+            CtxTextBlock.Margin = new Thickness(0, 0, 12, 0);
+            CtxTextBlock.HorizontalAlignment = HorizontalAlignment.Right;
+            Grid.SetColumn(CtxTextBlock, 3);
+            footer.Children.Add(CtxTextBlock);
 
             var buttonPanel = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Right,
-                Margin = new Thickness(5)
+                VerticalAlignment = VerticalAlignment.Center
             };
             SendButton = new Button
             {
                 Content = "Send",
-                Padding = new Thickness(10, 5, 10, 5),
-                Margin = new Thickness(0, 0, 5, 0),
+                Padding = new Thickness(14, 4, 14, 4),
+                Margin = new Thickness(0, 0, 6, 0),
+                MinWidth = 80,
                 IsDefault = true
             };
             SendButton.Click += SendButton_Click;
@@ -106,14 +227,111 @@ namespace VSAgent.Views
             CancelButton = new Button
             {
                 Content = "Cancel",
-                Padding = new Thickness(10, 5, 10, 5),
+                Padding = new Thickness(14, 4, 14, 4),
+                MinWidth = 80,
                 IsEnabled = false
             };
             CancelButton.Click += CancelButton_Click;
             buttonPanel.Children.Add(CancelButton);
-            Grid.SetRow(buttonPanel, 2);
-            mainGrid.Children.Add(buttonPanel);
+
+            Grid.SetColumn(buttonPanel, 4);
+            footer.Children.Add(buttonPanel);
+
+            StatusBar.Child = footer;
+            Grid.SetRow(StatusBar, 1);
+            mainGrid.Children.Add(StatusBar);
+
             Content = mainGrid;
+        }
+
+        private void BuildTabItemStyle()
+        {
+            var border = new FrameworkElementFactory(typeof(Border));
+            border.Name = "Bd";
+            border.SetValue(Border.BorderThicknessProperty, new Thickness(0, 0, 0, 2));
+            border.SetValue(Border.BorderBrushProperty, new SolidColorBrush(Colors.Transparent));
+            border.SetValue(Border.PaddingProperty, new Thickness(14, 6, 14, 6));
+            border.SetBinding(Border.BackgroundProperty, new Binding("Background")
+            {
+                RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent)
+            });
+            border.SetBinding(Border.BorderBrushProperty, new Binding("BorderBrush")
+            {
+                RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent)
+            });
+
+            var contentPresenter = new FrameworkElementFactory(typeof(ContentPresenter));
+            contentPresenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            contentPresenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+            contentPresenter.SetBinding(ContentPresenter.ContentProperty, new Binding("Header")
+            {
+                RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent)
+            });
+            contentPresenter.SetBinding(ContentPresenter.ContentTemplateProperty, new Binding("HeaderTemplate")
+            {
+                RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent)
+            });
+            contentPresenter.SetBinding(TextElement.ForegroundProperty, new Binding("Foreground")
+            {
+                RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent)
+            });
+            contentPresenter.SetBinding(TextBlock.FontWeightProperty, new Binding("FontWeight")
+            {
+                RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent)
+            });
+            contentPresenter.SetBinding(TextBlock.FontSizeProperty, new Binding("FontSize")
+            {
+                RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent)
+            });
+            border.AppendChild(contentPresenter);
+
+            var template = new ControlTemplate(typeof(TabItem)) { VisualTree = border };
+
+            var selected = new Trigger { Property = TabItem.IsSelectedProperty, Value = true };
+            selected.Setters.Add(new Setter(Border.BorderBrushProperty,
+                new DynamicResourceExtension(VsBrushes.AccentMediumKey), "Bd"));
+            template.Triggers.Add(selected);
+
+            var unselected = new Trigger { Property = TabItem.IsSelectedProperty, Value = false };
+            unselected.Setters.Add(new Setter(Border.BorderBrushProperty,
+                new SolidColorBrush(Colors.Transparent), "Bd"));
+            template.Triggers.Add(unselected);
+
+            var disabled = new Trigger { Property = TabItem.IsEnabledProperty, Value = false };
+            disabled.Setters.Add(new Setter(TextElement.ForegroundProperty,
+                new DynamicResourceExtension(VsBrushes.ToolWindowTextKey), "Bd"));
+            template.Triggers.Add(disabled);
+
+            var style = new Style(typeof(TabItem));
+            style.Setters.Add(new Setter(Control.TemplateProperty, template));
+            style.Setters.Add(new Setter(TabItem.BackgroundProperty,
+                new DynamicResourceExtension(VsBrushes.ToolWindowBackgroundKey)));
+            style.Setters.Add(new Setter(TabItem.ForegroundProperty,
+                new DynamicResourceExtension(VsBrushes.ToolWindowTextKey)));
+            style.Setters.Add(new Setter(TabItem.BorderBrushProperty,
+                new SolidColorBrush(Colors.Transparent)));
+            style.Setters.Add(new Setter(TabItem.FontSizeProperty, 12.0));
+            style.Setters.Add(new Setter(TabItem.FontWeightProperty, FontWeights.SemiBold));
+            style.Setters.Add(new Setter(TabItem.HorizontalContentAlignmentProperty, HorizontalAlignment.Stretch));
+            style.Setters.Add(new Setter(TabItem.VerticalContentAlignmentProperty, VerticalAlignment.Stretch));
+            style.Setters.Add(new Setter(TabItem.PaddingProperty, new Thickness(0)));
+            style.Setters.Add(new Setter(TabItem.FocusVisualStyleProperty, null));
+            style.Setters.Add(new Setter(System.Windows.Controls.TextBlock.ForegroundProperty,
+                new DynamicResourceExtension(VsBrushes.ToolWindowTextKey)));
+            Resources.Add(typeof(TabItem), style);
+        }
+
+        private static TextBlock MakeStatusText(string text, FontWeight weight)
+        {
+            var tb = new TextBlock
+            {
+                Text = text,
+                VerticalAlignment = VerticalAlignment.Center,
+                FontSize = 12,
+                FontWeight = weight
+            };
+            tb.SetResourceReference(TextBlock.ForegroundProperty, VsBrushes.ToolWindowTextKey);
+            return tb;
         }
     }
 }

@@ -1,4 +1,10 @@
+using System.Text;
 using VSAgent.McpHost;
+
+// oh-my-pi speaks UTF-8 over stdio. The default Windows OEM codepage
+// (CP850/CP437) would corrupt non-ASCII characters in tool results.
+Console.InputEncoding = Encoding.UTF8;
+Console.OutputEncoding = Encoding.UTF8;
 
 var pipeName = GetArgument(args, "--pipe");
 if (string.IsNullOrWhiteSpace(pipeName))

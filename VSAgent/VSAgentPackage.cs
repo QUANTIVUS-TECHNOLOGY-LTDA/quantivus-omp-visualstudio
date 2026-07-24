@@ -17,13 +17,32 @@ namespace VSAgent
     public sealed class VSAgentPackage : AsyncPackage
     {
         public const string PackageGuidString = "41f0c0d8-5c2b-4f02-8c7e-0b3d3b6e1a2f";
+        internal static Microsoft.VisualStudio.OLE.Interop.IServiceProvider PackageServiceProvider { get; private set; }
+        public static System.IServiceProvider GetServiceProvider()
+        {
+            if (PackageServiceProvider == null) return null;
+            return new Microsoft.VisualStudio.Shell.ServiceProvider(PackageServiceProvider);
+        }
 
+        internal static AsyncPackage Instance { get; private set; }
+
+        public static T GetOptions<T>() where T : Microsoft.VisualStudio.Shell.DialogPage
+        {
+            if (Instance != null)
+                return (T)Instance.GetDialogPage(typeof(T));
+            return null;
+        }
+
+        internal static SkillStore Skills { get; } = new SkillStore();
+        internal static ActiveSkillRegistry ActiveSkills { get; } = new ActiveSkillRegistry(Skills);
         internal static AgentHostService AgentHost { get; private set; }
 
         protected override async Task InitializeAsync(
             CancellationToken cancellationToken,
             IProgress<ServiceProgressData> progress)
         {
+            Instance = this;
+            PackageServiceProvider = this;
             AgentHost = new AgentHostService();
             try
             {

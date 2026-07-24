@@ -1,12 +1,17 @@
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Threading;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using VSAgent.Models;
+using VSAgent.Views;
 
 namespace VSAgent.Services.Omp
 {
@@ -26,13 +31,26 @@ namespace VSAgent.Services.Omp
         public event EventHandler<string> StatusChanged;
         public event EventHandler<string> TextReceived;
 
+        public bool AutoApproveReadOnly { get; set; } = true;
+
+
         public bool IsRunning => process != null && !process.HasExited && !string.IsNullOrWhiteSpace(sessionId);
+
+        public Task StartAsync(
+            string executablePath,
+            string workingDirectory,
+            string mcpHostPath,
+            string pipeName,
+            CancellationToken cancellationToken)
+            => StartAsync(executablePath, workingDirectory, mcpHostPath, pipeName, null, null, cancellationToken);
 
         public async Task StartAsync(
             string executablePath,
             string workingDirectory,
             string mcpHostPath,
             string pipeName,
+            string modelProvider,
+            string modelName,
             CancellationToken cancellationToken)
         {
             if (IsRunning) return;
@@ -53,9 +71,14 @@ namespace VSAgent.Services.Omp
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
                 CreateNoWindow = true
             };
-
+            if (!string.IsNullOrWhiteSpace(modelProvider))
+                startInfo.Environment["OMP_PROVIDER"] = modelProvider;
+            if (!string.IsNullOrWhiteSpace(modelName))
+                startInfo.Environment["OMP_MODEL"] = modelName;
             process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
             process.Exited += (_, __) => OnStatusChanged("oh-my-pi stopped.");
             if (!process.Start()) throw new InvalidOperationException("Could not start oh-my-pi.");
@@ -115,6 +138,36 @@ namespace VSAgent.Services.Omp
             lock (responseText) return responseText.ToString();
         }
 
+        // Sends a follow-up message to the running session without canceling it.
+        // OMP/ACP accepts multiple in-flight session/prompt requests; each is
+        // matched by request id and processed by the agent as a follow-up
+        // user message. We do not clear responseText, do not touch the
+        // running prompt's cancellation, and do not wait for a turn-complete
+        // response — the response is folded into the live stream.
+        public async Task SteerAsync(string message, CancellationToken cancellationToken)
+        {
+            if (!IsRunning) throw new InvalidOperationException("oh-my-pi is not running.");
+            if (string.IsNullOrWhiteSpace(message)) return;
+
+            OnStatusChanged("Steering the agent...");
+            try
+            {
+                await SendRequestAsync("session/prompt", new JObject
+                {
+                    ["sessionId"] = sessionId,
+                    ["prompt"] = new JArray
+                    {
+                        new JObject { ["type"] = "text", ["text"] = message }
+                    }
+                }, cancellationToken).ConfigureAwait(false);
+                OnStatusChanged("Steering message delivered.");
+            }
+            catch (Exception ex)
+            {
+                OnStatusChanged("Steer failed: " + ex.Message);
+                throw;
+            }
+        }
         public async Task StopAsync()
         {
             var localProcess = process;
@@ -209,14 +262,16 @@ namespace VSAgent.Services.Omp
             if (string.Equals(method, "session/request_permission", StringComparison.Ordinal))
             {
                 var options = message["params"]?["options"] as JArray;
-                var safeOption = SelectPermissionOption(options, message["params"]);
+                var toolCall = message["params"]?["toolCall"];
+                var selected = await RequestPermissionAsync(options, toolCall, cancellationToken).ConfigureAwait(false);
+                JObject result = selected == null
+                    ? new JObject { ["outcome"] = "cancelled" }
+                    : new JObject { ["outcome"] = "selected", ["optionId"] = selected };
                 await WriteMessageAsync(new JObject
                 {
                     ["jsonrpc"] = "2.0",
                     ["id"] = id,
-                    ["result"] = safeOption == null
-                        ? new JObject { ["outcome"] = "cancelled" }
-                        : new JObject { ["outcome"] = "selected", ["optionId"] = safeOption }
+                    ["result"] = result
                 }, cancellationToken).ConfigureAwait(false);
                 return;
             }
@@ -233,35 +288,95 @@ namespace VSAgent.Services.Omp
             }, cancellationToken).ConfigureAwait(false);
         }
 
-        private static string SelectPermissionOption(JArray options, JToken request)
+        private async Task<string> RequestPermissionAsync(JArray options, JToken toolCall, CancellationToken cancellationToken)
         {
-            if (options == null) return null;
-            var description = request?["toolCall"]?.ToString(Formatting.None) ?? string.Empty;
-            var readOnly = description.IndexOf("read", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                           description.IndexOf("list", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                           description.IndexOf("get", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                           description.IndexOf("status", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (options == null || options.Count == 0) return null;
 
-            foreach (var option in options)
+            var parsed = ParseOptions(options);
+            if (parsed.Count == 0) return null;
+
+            // Heuristic: read-only requests are auto-approved when enabled.
+            if (AutoApproveReadOnly && IsReadOnlyRequest(toolCall))
             {
-                var optionId = option?["optionId"]?.Value<string>() ?? option?["id"]?.Value<string>();
-                var name = option?["name"]?.Value<string>() ?? option?["label"]?.Value<string>() ?? string.Empty;
-                if (readOnly && (name.IndexOf("allow", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                 optionId?.IndexOf("allow", StringComparison.OrdinalIgnoreCase) >= 0))
-                    return optionId;
+                foreach (var opt in parsed)
+                {
+                    if (Contains(opt.Name, "allow") || Contains(opt.OptionId, "allow"))
+                        return opt.OptionId;
+                }
             }
 
-            foreach (var option in options)
+            return await ShowPermissionDialogAsync(parsed, toolCall, cancellationToken).ConfigureAwait(false);
+        }
+
+        private static List<PermissionOption> ParseOptions(JArray options)
+        {
+            var result = new List<PermissionOption>(options.Count);
+            foreach (var token in options)
             {
-                var optionId = option?["optionId"]?.Value<string>() ?? option?["id"]?.Value<string>();
-                var name = option?["name"]?.Value<string>() ?? option?["label"]?.Value<string>() ?? string.Empty;
-                if (name.IndexOf("reject", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    name.IndexOf("deny", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    optionId?.IndexOf("reject", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    optionId?.IndexOf("deny", StringComparison.OrdinalIgnoreCase) >= 0)
-                    return optionId;
+                if (token is not JObject obj) continue;
+                var id = obj["optionId"]?.Value<string>() ?? obj["id"]?.Value<string>();
+                if (string.IsNullOrEmpty(id)) continue;
+                var name = obj["name"]?.Value<string>() ?? obj["label"]?.Value<string>() ?? id;
+                var kind = obj["kind"]?.Value<string>() ?? string.Empty;
+                result.Add(new PermissionOption(id, name, kind));
             }
-            return null;
+            return result;
+        }
+
+        private static bool IsReadOnlyRequest(JToken toolCall)
+        {
+            var blob = toolCall?.ToString(Formatting.None) ?? string.Empty;
+            return Contains(blob, "read") || Contains(blob, "list") ||
+                   Contains(blob, "get") || Contains(blob, "status") ||
+                   Contains(blob, "evaluate") || Contains(blob, "call_stack");
+        }
+        private static bool Contains(string text, string token) =>
+            text.IndexOf(token, StringComparison.OrdinalIgnoreCase) >= 0;
+
+        private async Task<string> ShowPermissionDialogAsync(List<PermissionOption> options, JToken toolCall, CancellationToken cancellationToken)
+        {
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher == null) return null;
+
+            var summary = ExtractSummary(toolCall);
+            var description = toolCall?.ToString(Formatting.Indented) ?? string.Empty;
+            if (description.Length > 2000) description = description.Substring(0, 2000) + "\n...";
+
+            var tcs = new TaskCompletionSource<string?>();
+
+            await dispatcher.InvokeAsync(async () =>
+            {
+                var dialog = new PermissionRequestDialog(summary, description, options);
+                var cancelled = false;
+                using (cancellationToken.Register(() =>
+                {
+                    cancelled = true;
+                    dialog.Dispatcher.BeginInvoke(new Action(dialog.Close));
+                }))
+                {
+                    dialog.ShowDialog();
+                }
+                tcs.SetResult(cancelled ? null : (dialog.DialogResult == true ? dialog.SelectedOptionId : null));
+            }).Task.ConfigureAwait(false);
+
+            return await tcs.Task.ConfigureAwait(false);
+        }
+
+        private static string ExtractSummary(JToken toolCall)
+        {
+            if (toolCall is JObject obj)
+            {
+                var title = obj["title"]?.Value<string>();
+                if (!string.IsNullOrWhiteSpace(title))
+                {
+                    var firstLine = title.Split(new[] { '\r', '\n' }, 2, StringSplitOptions.RemoveEmptyEntries)[0].Trim();
+                    if (firstLine.Length > 120) firstLine = firstLine.Substring(0, 117) + "...";
+                    return firstLine;
+                }
+                var rawName = obj["rawInput"]?["name"]?.Value<string>() ?? obj["name"]?.Value<string>();
+                if (!string.IsNullOrWhiteSpace(rawName)) return rawName;
+            }
+            return "oh-my-pi tool call";
         }
 
         private void HandleSessionUpdate(JObject parameters)
@@ -277,11 +392,18 @@ namespace VSAgent.Services.Omp
                     TextReceived?.Invoke(this, text);
                 }
             }
-            else if (string.Equals(type, "tool_call", StringComparison.Ordinal) ||
-                     string.Equals(type, "tool_call_update", StringComparison.Ordinal))
+            else if (string.Equals(type, "tool_call", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(type, "tool_call_update", StringComparison.OrdinalIgnoreCase))
             {
                 var title = update?["title"]?.Value<string>() ?? update?["toolCallId"]?.Value<string>();
-                if (!string.IsNullOrWhiteSpace(title)) OnStatusChanged("Tool: " + title);
+                if (!string.IsNullOrWhiteSpace(title))
+                {
+                    // omp packs the tool source into "title". Keep only the first
+                    // line and cap length so the status bar stays readable.
+                    var firstLine = title.Split(new[] { '\r', '\n' }, 2, StringSplitOptions.RemoveEmptyEntries)[0].Trim();
+                    if (firstLine.Length > 80) firstLine = firstLine.Substring(0, 77) + "...";
+                    OnStatusChanged("Tool: " + firstLine);
+                }
             }
         }
 

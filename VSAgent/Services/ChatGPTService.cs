@@ -54,6 +54,14 @@ Cover normal behavior, edge cases, and failure paths. Detect the test framework 
             return host.PromptAsync(prompt, null, cancellationToken);
         }
 
+        public Task SteerAsync(string message, CancellationToken cancellationToken = default)
+        {
+            var host = VSAgentPackage.AgentHost;
+            if (host == null)
+                throw new InvalidOperationException("The oh-my-pi agent host has not been initialized.");
+            return host.SteerAsync(message, cancellationToken);
+        }
+
         public void Dispose() { }
     }
 }
