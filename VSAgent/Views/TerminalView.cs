@@ -14,6 +14,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using VSAgent.Ui;
+using DiagnosticsProcess = System.Diagnostics.Process;
 
 namespace VSAgent.Views
 {
@@ -34,7 +35,7 @@ namespace VSAgent.Views
         private readonly List<string> history = new List<string>();
         private int historyIndex;
         private CancellationTokenSource executionCancellation;
-        private Process runningProcess;
+        private DiagnosticsProcess runningProcess;
 
         public TerminalView()
         {
@@ -160,7 +161,7 @@ namespace VSAgent.Views
         {
             var completion = new TaskCompletionSource<int>();
             var startInfo = CreateStartInfo(shell, command, directory);
-            var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+            var process = new DiagnosticsProcess { StartInfo = startInfo, EnableRaisingEvents = true };
             runningProcess = process;
             CancellationTokenRegistration registration = default(CancellationTokenRegistration);
 
@@ -222,7 +223,7 @@ namespace VSAgent.Views
                 default:
                     executable = "powershell.exe";
                     var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
-                    arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + encoded;
+                    arguments = "-NoLogo -NoProfile -NonInteractive -EncodedCommand " + encoded;
                     break;
             }
 
