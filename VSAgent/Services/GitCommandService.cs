@@ -43,7 +43,6 @@ namespace VSAgent.Services
         public bool IsStaged => !string.IsNullOrWhiteSpace(IndexStatus) && IndexStatus != "?";
         public bool IsUntracked => IndexStatus == "?" && WorkTreeStatus == "?";
         public string StatusText => (IndexStatus ?? " ") + (WorkTreeStatus ?? " ");
-
         public override string ToString() => StatusText + "  " + Path;
     }
 
@@ -60,8 +59,8 @@ namespace VSAgent.Services
     }
 
     /// <summary>
-    /// Executes Git without a shell. Commands used by the workbench are explicit,
-    /// cancellable and classified before the UI decides whether confirmation is required.
+    /// Executes explicit Git commands without a shell. Output is bounded, calls
+    /// are cancellable and write/destructive commands can be classified before use.
     /// </summary>
     public sealed class GitCommandService
     {
@@ -72,11 +71,14 @@ namespace VSAgent.Services
             if (string.IsNullOrWhiteSpace(directory)) return null;
             try
             {
-                var current = new DirectoryInfo(Path.GetFullPath(directory));
-                if (current.Exists && File.Exists(current.FullName)) current = current.Parent;
+                var fullPath = Path.GetFullPath(directory);
+                var current = File.Exists(fullPath)
+                    ? new FileInfo(fullPath).Directory
+                    : new DirectoryInfo(fullPath);
                 while (current != null)
                 {
-                    if (Directory.Exists(Path.Combine(current.FullName, ".git"))) return current.FullName;
+                    if (Directory.Exists(Path.Combine(current.FullName, ".git")) || File.Exists(Path.Combine(current.FullName, ".git")))
+                        return current.FullName;
                     current = current.Parent;
                 }
             }
@@ -93,7 +95,7 @@ namespace VSAgent.Services
             var all = string.Join(" ", normalized).ToLowerInvariant();
 
             if (all.Contains("--force") || all.Contains(" -f") || all.Contains("--hard") ||
-                command == "clean" || all.Contains("branch -d") || all.Contains("branch -D".ToLowerInvariant()) ||
+                command == "clean" || all.Contains("branch -d") ||
                 (command == "checkout" && all.Contains(" -- ")) ||
                 (command == "restore" && !all.Contains("--staged")))
                 return GitCommandRisk.Destructive;
@@ -108,6 +110,7 @@ namespace VSAgent.Services
                 case "ls-files":
                 case "remote":
                 case "tag":
+                case "--version":
                     return GitCommandRisk.ReadOnly;
                 case "branch":
                     return normalized.Length == 1 || all.Contains("--show-current") || all.Contains("--list")
@@ -129,8 +132,7 @@ namespace VSAgent.Services
                 return new GitWorkspaceStatus { RootDirectory = root, Error = result.CombinedOutput.Trim() };
 
             var status = new GitWorkspaceStatus { RootDirectory = root };
-            var lines = SplitLines(result.StandardOutput);
-            foreach (var line in lines)
+            foreach (var line in SplitLines(result.StandardOutput))
             {
                 if (line.StartsWith("## ", StringComparison.Ordinal))
                 {
@@ -163,26 +165,14 @@ namespace VSAgent.Services
             return RunAsync(RequireRoot(directory), cancellationToken, args.ToArray());
         }
 
-        public Task<GitProcessResult> StageAsync(string directory, IEnumerable<string> paths, CancellationToken cancellationToken)
-        {
-            var args = new List<string> { "add", "--" };
-            args.AddRange(NormalizePaths(paths));
-            return RunAsync(RequireRoot(directory), cancellationToken, args.ToArray());
-        }
+        public Task<GitProcessResult> StageAsync(string directory, IEnumerable<string> paths, CancellationToken cancellationToken) =>
+            RunPathsAsync(directory, cancellationToken, new[] { "add", "--" }, paths);
 
-        public Task<GitProcessResult> UnstageAsync(string directory, IEnumerable<string> paths, CancellationToken cancellationToken)
-        {
-            var args = new List<string> { "restore", "--staged", "--" };
-            args.AddRange(NormalizePaths(paths));
-            return RunAsync(RequireRoot(directory), cancellationToken, args.ToArray());
-        }
+        public Task<GitProcessResult> UnstageAsync(string directory, IEnumerable<string> paths, CancellationToken cancellationToken) =>
+            RunPathsAsync(directory, cancellationToken, new[] { "restore", "--staged", "--" }, paths);
 
-        public Task<GitProcessResult> DiscardAsync(string directory, IEnumerable<string> paths, CancellationToken cancellationToken)
-        {
-            var args = new List<string> { "restore", "--worktree", "--" };
-            args.AddRange(NormalizePaths(paths));
-            return RunAsync(RequireRoot(directory), cancellationToken, args.ToArray());
-        }
+        public Task<GitProcessResult> DiscardAsync(string directory, IEnumerable<string> paths, CancellationToken cancellationToken) =>
+            RunPathsAsync(directory, cancellationToken, new[] { "restore", "--worktree", "--" }, paths);
 
         public Task<GitProcessResult> CommitAsync(string directory, string message, CancellationToken cancellationToken)
         {
@@ -211,6 +201,7 @@ namespace VSAgent.Services
         public Task<GitProcessResult> RunAsync(string workingDirectory, CancellationToken cancellationToken, params string[] arguments)
         {
             if (string.IsNullOrWhiteSpace(workingDirectory)) throw new ArgumentNullException(nameof(workingDirectory));
+            if (!Directory.Exists(workingDirectory)) throw new DirectoryNotFoundException(workingDirectory);
             if (arguments == null || arguments.Length == 0) throw new ArgumentException("A Git command is required.", nameof(arguments));
 
             var completion = new TaskCompletionSource<GitProcessResult>();
@@ -222,20 +213,22 @@ namespace VSAgent.Services
 
             try
             {
-                var startInfo = new ProcessStartInfo
+                process = new Process
                 {
-                    FileName = "git.exe",
-                    Arguments = JoinArguments(arguments),
-                    WorkingDirectory = workingDirectory,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    StandardOutputEncoding = Encoding.UTF8,
-                    StandardErrorEncoding = Encoding.UTF8
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "git.exe",
+                        Arguments = JoinArguments(arguments),
+                        WorkingDirectory = workingDirectory,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        StandardOutputEncoding = Encoding.UTF8,
+                        StandardErrorEncoding = Encoding.UTF8
+                    },
+                    EnableRaisingEvents = true
                 };
-
-                process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
                 process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e)
                 {
                     if (e.Data != null) AppendBounded(stdout, e.Data);
@@ -258,10 +251,7 @@ namespace VSAgent.Services
                             Duration = started.Elapsed
                         });
                     }
-                    catch (Exception ex)
-                    {
-                        completion.TrySetException(ex);
-                    }
+                    catch (Exception ex) { completion.TrySetException(ex); }
                     finally
                     {
                         registration.Dispose();
@@ -272,14 +262,9 @@ namespace VSAgent.Services
                 if (!process.Start()) throw new InvalidOperationException("Git could not be started.");
                 process.BeginOutputReadLine();
                 process.BeginErrorReadLine();
-
                 registration = cancellationToken.Register(delegate
                 {
-                    try
-                    {
-                        if (!process.HasExited) process.Kill();
-                    }
-                    catch { }
+                    try { if (!process.HasExited) process.Kill(); } catch { }
                     completion.TrySetCanceled();
                 });
             }
@@ -289,8 +274,14 @@ namespace VSAgent.Services
                 process?.Dispose();
                 completion.TrySetException(ex);
             }
-
             return completion.Task;
+        }
+
+        private Task<GitProcessResult> RunPathsAsync(string directory, CancellationToken cancellationToken, IEnumerable<string> prefix, IEnumerable<string> paths)
+        {
+            var args = prefix.ToList();
+            args.AddRange(NormalizePaths(paths));
+            return RunAsync(RequireRoot(directory), cancellationToken, args.ToArray());
         }
 
         private static string RequireRoot(string directory)
@@ -315,7 +306,8 @@ namespace VSAgent.Services
         {
             if (string.IsNullOrWhiteSpace(branchName)) throw new ArgumentException("A branch name is required.", nameof(branchName));
             var invalid = new[] { "..", "~", "^", ":", "?", "*", "[", "\\", " ", "@{" };
-            if (invalid.Any(branchName.Contains) || branchName.StartsWith("-") || branchName.EndsWith("/") || branchName.EndsWith("."))
+            if (invalid.Any(branchName.Contains) || branchName.StartsWith("-", StringComparison.Ordinal) ||
+                branchName.EndsWith("/", StringComparison.Ordinal) || branchName.EndsWith(".", StringComparison.Ordinal))
                 throw new ArgumentException("The branch name is not valid.", nameof(branchName));
         }
 
@@ -330,10 +322,11 @@ namespace VSAgent.Services
                 foreach (var part in detail.Split(','))
                 {
                     var value = part.Trim();
-                    if (value.StartsWith("ahead ", StringComparison.OrdinalIgnoreCase))
-                        int.TryParse(value.Substring(6), out status.Ahead);
-                    else if (value.StartsWith("behind ", StringComparison.OrdinalIgnoreCase))
-                        int.TryParse(value.Substring(7), out status.Behind);
+                    int parsed;
+                    if (value.StartsWith("ahead ", StringComparison.OrdinalIgnoreCase) && int.TryParse(value.Substring(6), out parsed))
+                        status.Ahead = parsed;
+                    else if (value.StartsWith("behind ", StringComparison.OrdinalIgnoreCase) && int.TryParse(value.Substring(7), out parsed))
+                        status.Behind = parsed;
                 }
             }
             var dots = branchPart.IndexOf("...", StringComparison.Ordinal);
@@ -341,8 +334,7 @@ namespace VSAgent.Services
             if (status.Branch == "HEAD (no branch)") status.Branch = "detached HEAD";
         }
 
-        private static string JoinArguments(IEnumerable<string> arguments) =>
-            string.Join(" ", arguments.Select(QuoteArgument));
+        private static string JoinArguments(IEnumerable<string> arguments) => string.Join(" ", arguments.Select(QuoteArgument));
 
         private static string QuoteArgument(string value)
         {
