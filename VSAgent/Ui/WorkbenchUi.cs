@@ -3,7 +3,6 @@ using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
-using System.Windows.Media;
 
 namespace VSAgent.Ui
 {
@@ -79,7 +78,7 @@ namespace VSAgent.Ui
 
         public static TextBox TextBox(string text = null, bool multiLine = false)
         {
-            var value = new TextBox
+            return new TextBox
             {
                 Text = text ?? string.Empty,
                 Style = StyleFactory.TextBoxStyle(),
@@ -88,7 +87,6 @@ namespace VSAgent.Ui
                 VerticalScrollBarVisibility = multiLine ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled,
                 HorizontalScrollBarVisibility = multiLine ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled
             };
-            return value;
         }
 
         public static CheckBox CheckBox(string text, bool isChecked = false)
@@ -101,10 +99,7 @@ namespace VSAgent.Ui
             };
         }
 
-        public static ComboBox ComboBox()
-        {
-            return new ComboBox { Style = StyleFactory.ComboBoxStyle() };
-        }
+        public static ComboBox ComboBox() => new ComboBox { Style = StyleFactory.ComboBoxStyle() };
 
         public static ListBox ListBox(SelectionMode selectionMode = SelectionMode.Single)
         {
@@ -112,10 +107,10 @@ namespace VSAgent.Ui
             {
                 Style = StyleFactory.ListBoxStyle(),
                 ItemContainerStyle = StyleFactory.ListBoxItemStyle(),
-                SelectionMode = selectionMode,
-                ScrollViewer.VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                ScrollViewer.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto
+                SelectionMode = selectionMode
             };
+            ScrollViewer.SetVerticalScrollBarVisibility(value, ScrollBarVisibility.Auto);
+            ScrollViewer.SetHorizontalScrollBarVisibility(value, ScrollBarVisibility.Auto);
             VirtualizingStackPanel.SetIsVirtualizing(value, true);
             VirtualizingStackPanel.SetVirtualizationMode(value, VirtualizationMode.Recycling);
             return value;
@@ -156,7 +151,7 @@ namespace VSAgent.Ui
             if (actions != null)
             {
                 Grid.SetColumn(actions, 1);
-                actions.VerticalAlignment = VerticalAlignment.Top;
+                if (actions is FrameworkElement element) element.VerticalAlignment = VerticalAlignment.Top;
                 grid.Children.Add(actions);
             }
             return grid;
