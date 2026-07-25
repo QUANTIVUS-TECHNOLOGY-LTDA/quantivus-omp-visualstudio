@@ -1,0 +1,31 @@
+# Copy to .ompignore and adapt for your repository.
+# Rules are evaluated after built-in exclusions and .gitignore.
+
+# Secrets and environment-specific configuration
+.env
+.env.*
+**/secrets.json
+**/appsettings.*.json
+**/*.pfx
+**/*.p12
+**/*.pem
+**/*.key
+
+# Generated or vendored source
+**/Generated/**
+**/generated/**
+**/vendor/**
+**/third_party/**
+
+# Large fixtures, snapshots and exports
+**/Snapshots/**
+**/fixtures/large/**
+**/exports/**
+**/*.log
+
+# Repository-specific private material
+private/**
+internal-notes/**
+
+# Negate a broader rule when a generated file is intentionally useful
+# !src/Generated/PublicContract.g.cs
