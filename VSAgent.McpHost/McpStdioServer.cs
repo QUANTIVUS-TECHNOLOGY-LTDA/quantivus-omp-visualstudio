@@ -96,7 +96,7 @@ internal sealed class McpStdioServer
             ["serverInfo"] = new JsonObject
             {
                 ["name"] = "quantivus-visual-studio",
-                ["version"] = "0.1.0"
+                ["version"] = "0.2.0"
             }
         };
     }
@@ -168,32 +168,155 @@ internal sealed class McpStdioServer
     }
 
     private static JsonArray CreateTools() => new(
-        Tool("vs_get_status", "Get the current Visual Studio solution and debugger state.", EmptySchema()),
-        Tool("vs_get_solution", "List the open solution and its projects.", EmptySchema()),
-        Tool("vs_build_solution", "Build the open Visual Studio solution and wait for completion.", EmptySchema()),
-        Tool("vs_rebuild_solution", "Clean and rebuild the open Visual Studio solution.", EmptySchema()),
-        Tool("vs_debug_start", "Start or continue debugging the configured startup project.", EmptySchema()),
-        Tool("vs_debug_stop", "Stop the current Visual Studio debugging session.", EmptySchema()),
-        Tool("vs_debug_pause", "Pause the current Visual Studio debugging session.", EmptySchema()),
-        Tool("vs_debug_continue", "Continue the paused Visual Studio debugging session.", EmptySchema()),
-        Tool("vs_debug_step_over", "Execute Step Over in the Visual Studio debugger.", EmptySchema()),
-        Tool("vs_debug_step_into", "Execute Step Into in the Visual Studio debugger.", EmptySchema()),
-        Tool("vs_debug_step_out", "Execute Step Out in the Visual Studio debugger.", EmptySchema()),
-        Tool("vs_breakpoint_add", "Add a source breakpoint in Visual Studio.", ObjectSchema(
-            required: ["file", "line"],
-            properties: new JsonObject
+        Tool("vs_get_status", "Get solution, build, active-document and debugger status.", EmptySchema()),
+        Tool("vs_execute_command", "Execute any registered Visual Studio command by canonical command name. This exposes the full IDE command surface and may change files or IDE state.", ObjectSchema(
+            ["name"],
+            new JsonObject
+            {
+                ["name"] = StringProperty("Canonical Visual Studio command, for example File.SaveAll, Debug.Restart or TestExplorer.RunAllTests."),
+                ["arguments"] = StringProperty("Optional command arguments.")
+            })),
+        Tool("vs_command_list", "List registered Visual Studio commands, optionally filtered by name.", ObjectSchema(
+            [],
+            new JsonObject
+            {
+                ["filter"] = StringProperty("Optional case-insensitive command-name filter."),
+                ["limit"] = IntegerProperty("Maximum commands to return.", 1, 500)
+            })),
+        Tool("vs_window_list", "List Visual Studio document and tool windows.", EmptySchema()),
+        Tool("vs_window_activate", "Show and activate a Visual Studio window by caption and/or kind.", ObjectSchema(
+            [],
+            new JsonObject
+            {
+                ["caption"] = StringProperty("Exact window caption."),
+                ["kind"] = StringProperty("Exact Visual Studio window kind GUID.")
+            })),
+
+        Tool("vs_get_solution", "Inspect the open solution, active configuration and nested projects.", EmptySchema()),
+        Tool("vs_solution_open", "Open a solution or supported workspace file in Visual Studio.", ObjectSchema(
+            ["path"], new JsonObject { ["path"] = StringProperty("Absolute path to the solution or workspace file.") })),
+        Tool("vs_solution_close", "Close the current solution.", ObjectSchema(
+            [], new JsonObject { ["save"] = BooleanProperty("Save pending changes before closing. Defaults to true.") })),
+        Tool("vs_solution_configuration_list", "List solution configurations and platforms.", EmptySchema()),
+        Tool("vs_solution_configuration_activate", "Activate a solution configuration and optional platform.", ObjectSchema(
+            ["name"],
+            new JsonObject
+            {
+                ["name"] = StringProperty("Configuration name, for example Debug or Release."),
+                ["platform"] = StringProperty("Optional platform, for example Any CPU or x64.")
+            })),
+        Tool("vs_project_set_startup", "Set the startup project by project name, unique name or path.", ObjectSchema(
+            ["project"], new JsonObject { ["project"] = StringProperty("Project name, unique name or project-file path.") })),
+        Tool("vs_build_solution", "Build the open solution and wait for completion.", BuildSchema()),
+        Tool("vs_rebuild_solution", "Clean and rebuild the open solution and wait for completion.", BuildSchema()),
+        Tool("vs_clean_solution", "Clean the open solution and wait for completion.", EmptySchema()),
+        Tool("vs_build_project", "Build one project and wait for completion.", ObjectSchema(
+            ["project"],
+            new JsonObject
+            {
+                ["project"] = StringProperty("Project name, unique name or project-file path."),
+                ["configuration"] = StringProperty("Optional solution configuration; defaults to the active configuration.")
+            })),
+        Tool("vs_build_cancel", "Cancel the current Visual Studio build.", EmptySchema()),
+        Tool("vs_get_build_errors", "Read Error List entries with file, line, column and project metadata.", ObjectSchema(
+            [],
+            new JsonObject
+            {
+                ["includeWarnings"] = BooleanProperty("Include warnings and messages. Defaults to true."),
+                ["limit"] = IntegerProperty("Maximum entries to return.", 1, 5000)
+            })),
+
+        Tool("vs_document_list", "List all open Visual Studio documents.", EmptySchema()),
+        Tool("vs_document_get_active", "Get active-document metadata and optionally its text.", ObjectSchema(
+            [],
+            new JsonObject
+            {
+                ["includeText"] = BooleanProperty("Include document text. Defaults to false."),
+                ["maxCharacters"] = IntegerProperty("Maximum text characters returned.", 1, 2000000)
+            })),
+        Tool("vs_document_open", "Open a file in the Visual Studio editor and optionally navigate to a position.", ObjectSchema(
+            ["path"],
+            new JsonObject
+            {
+                ["path"] = StringProperty("Absolute file path."),
+                ["line"] = IntegerProperty("Optional one-based line.", 1, null),
+                ["column"] = IntegerProperty("Optional one-based column.", 1, null)
+            })),
+        Tool("vs_document_get_text", "Read text from an open document or the active document.", ObjectSchema(
+            [],
+            new JsonObject
+            {
+                ["path"] = StringProperty("Optional open-document path or name."),
+                ["maxCharacters"] = IntegerProperty("Maximum text characters returned.", 1, 2000000)
+            })),
+        Tool("vs_document_replace_text", "Replace the complete contents of an open text document.", ObjectSchema(
+            ["text"],
+            new JsonObject
+            {
+                ["path"] = StringProperty("Optional open-document path or name; defaults to the active document."),
+                ["text"] = StringProperty("Complete replacement text.")
+            })),
+        Tool("vs_document_save", "Save an open document or the active document.", ObjectSchema(
+            [], new JsonObject { ["path"] = StringProperty("Optional open-document path or name.") })),
+        Tool("vs_document_save_all", "Save all open Visual Studio documents.", EmptySchema()),
+        Tool("vs_document_close", "Close an open document or the active document.", ObjectSchema(
+            [],
+            new JsonObject
+            {
+                ["path"] = StringProperty("Optional open-document path or name."),
+                ["save"] = BooleanProperty("Save before closing. Defaults to true.")
+            })),
+        Tool("vs_editor_get_selection", "Read the active editor selection and caret position.", EmptySchema()),
+        Tool("vs_editor_replace_selection", "Replace the active text selection or insert at the caret.", ObjectSchema(
+            ["text"], new JsonObject { ["text"] = StringProperty("Replacement or inserted text.") })),
+        Tool("vs_editor_navigate", "Navigate the active editor, optionally opening a file first.", ObjectSchema(
+            [],
+            new JsonObject
+            {
+                ["path"] = StringProperty("Optional file path."),
+                ["line"] = IntegerProperty("One-based line. Defaults to 1.", 1, null),
+                ["column"] = IntegerProperty("One-based column. Defaults to 1.", 1, null),
+                ["selectLine"] = BooleanProperty("Select the destination line.")
+            })),
+
+        Tool("vs_debug_start", "Start or continue debugging the configured startup project.", ProjectOptionalSchema()),
+        Tool("vs_debug_start_without_debugging", "Run the startup project without attaching the debugger.", ProjectOptionalSchema()),
+        Tool("vs_debug_stop", "Stop the current debugging session.", EmptySchema()),
+        Tool("vs_debug_restart", "Restart the current debugging session.", EmptySchema()),
+        Tool("vs_debug_pause", "Break all debugged processes.", EmptySchema()),
+        Tool("vs_debug_continue", "Continue a paused debugging session.", EmptySchema()),
+        Tool("vs_debug_step_over", "Execute Step Over.", EmptySchema()),
+        Tool("vs_debug_step_into", "Execute Step Into.", EmptySchema()),
+        Tool("vs_debug_step_out", "Execute Step Out.", EmptySchema()),
+        Tool("vs_debug_run_to_cursor", "Run the debugger to the current editor caret.", EmptySchema()),
+        Tool("vs_debug_set_next_statement", "Set the next statement to the current editor caret.", EmptySchema()),
+        Tool("vs_debug_detach_all", "Detach the debugger from all debugged processes.", EmptySchema()),
+        Tool("vs_debug_terminate_all", "Terminate all debugged processes.", EmptySchema()),
+        Tool("vs_debug_process_list", "List processes currently debugged by Visual Studio.", EmptySchema()),
+        Tool("vs_debug_thread_list", "List threads in the current debug program.", EmptySchema()),
+        Tool("vs_get_call_stack", "Read the current thread call stack while paused.", EmptySchema()),
+        Tool("vs_get_locals", "Read arguments and locals from the current stack frame.", EmptySchema()),
+        Tool("vs_evaluate", "Evaluate an expression in the current debugger stack frame.", ObjectSchema(
+            ["expression"],
+            new JsonObject
+            {
+                ["expression"] = StringProperty("Expression to evaluate."),
+                ["timeoutMilliseconds"] = IntegerProperty("Evaluation timeout.", 100, 60000),
+                ["treatAsStatement"] = BooleanProperty("Treat the expression as a statement. Defaults to true.")
+            })),
+
+        Tool("vs_breakpoint_add", "Add a source breakpoint, optionally with a condition.", ObjectSchema(
+            ["file", "line"],
+            new JsonObject
             {
                 ["file"] = StringProperty("Absolute source file path."),
-                ["line"] = IntegerProperty("One-based source line number.", 1)
+                ["line"] = IntegerProperty("One-based source line.", 1, null),
+                ["column"] = IntegerProperty("One-based source column. Defaults to 1.", 1, null),
+                ["condition"] = StringProperty("Optional break condition evaluated when true.")
             })),
         Tool("vs_breakpoint_list", "List all Visual Studio breakpoints.", EmptySchema()),
-        Tool("vs_get_call_stack", "Read the current thread call stack while the debugger is paused.", EmptySchema()),
-        Tool("vs_evaluate", "Evaluate an expression in the current debugger stack frame.", ObjectSchema(
-            required: ["expression"],
-            properties: new JsonObject
-            {
-                ["expression"] = StringProperty("Expression to evaluate in the current stack frame.")
-            }))
+        Tool("vs_breakpoint_remove", "Remove matching breakpoints or all breakpoints.", BreakpointSelectorSchema(includeEnabled: false)),
+        Tool("vs_breakpoint_set_enabled", "Enable or disable matching breakpoints or all breakpoints.", BreakpointSelectorSchema(includeEnabled: true))
     );
 
     private static JsonObject Tool(string name, string description, JsonObject inputSchema) => new()
@@ -203,10 +326,68 @@ internal sealed class McpStdioServer
         ["inputSchema"] = inputSchema,
         ["annotations"] = new JsonObject
         {
-            ["readOnlyHint"] = name.StartsWith("vs_get_", StringComparison.Ordinal) || name.EndsWith("_list", StringComparison.Ordinal),
-            ["destructiveHint"] = name is "vs_debug_stop" or "vs_rebuild_solution"
+            ["readOnlyHint"] = IsReadOnly(name),
+            ["destructiveHint"] = IsDestructive(name),
+            ["idempotentHint"] = IsReadOnly(name)
         }
     };
+
+    private static bool IsReadOnly(string name) =>
+        name is "vs_get_status"
+            or "vs_command_list"
+            or "vs_window_list"
+            or "vs_get_solution"
+            or "vs_solution_configuration_list"
+            or "vs_get_build_errors"
+            or "vs_document_list"
+            or "vs_document_get_active"
+            or "vs_document_get_text"
+            or "vs_editor_get_selection"
+            or "vs_debug_process_list"
+            or "vs_debug_thread_list"
+            or "vs_get_call_stack"
+            or "vs_get_locals"
+            or "vs_evaluate"
+            or "vs_breakpoint_list";
+
+    private static bool IsDestructive(string name) =>
+        name is "vs_execute_command"
+            or "vs_solution_close"
+            or "vs_document_replace_text"
+            or "vs_document_close"
+            or "vs_editor_replace_selection"
+            or "vs_debug_stop"
+            or "vs_debug_restart"
+            or "vs_debug_set_next_statement"
+            or "vs_debug_detach_all"
+            or "vs_debug_terminate_all"
+            or "vs_breakpoint_remove";
+
+    private static JsonObject BuildSchema() => ObjectSchema(
+        [],
+        new JsonObject
+        {
+            ["configuration"] = StringProperty("Optional configuration name."),
+            ["platform"] = StringProperty("Optional platform name.")
+        });
+
+    private static JsonObject ProjectOptionalSchema() => ObjectSchema(
+        [],
+        new JsonObject { ["project"] = StringProperty("Optional startup project name, unique name or project-file path.") });
+
+    private static JsonObject BreakpointSelectorSchema(bool includeEnabled)
+    {
+        var properties = new JsonObject
+        {
+            ["all"] = BooleanProperty("Apply to all breakpoints."),
+            ["file"] = StringProperty("Optional source file path or file name."),
+            ["line"] = IntegerProperty("Optional one-based source line.", 1, null)
+        };
+        if (includeEnabled)
+            properties["enabled"] = BooleanProperty("Desired enabled state. Defaults to true.");
+
+        return ObjectSchema([], properties);
+    }
 
     private static JsonObject EmptySchema() => ObjectSchema([], new JsonObject());
 
@@ -224,10 +405,21 @@ internal sealed class McpStdioServer
         ["description"] = description
     };
 
-    private static JsonObject IntegerProperty(string description, int minimum) => new()
+    private static JsonObject BooleanProperty(string description) => new()
     {
-        ["type"] = "integer",
-        ["description"] = description,
-        ["minimum"] = minimum
+        ["type"] = "boolean",
+        ["description"] = description
     };
+
+    private static JsonObject IntegerProperty(string description, int? minimum, int? maximum)
+    {
+        var property = new JsonObject
+        {
+            ["type"] = "integer",
+            ["description"] = description
+        };
+        if (minimum.HasValue) property["minimum"] = minimum.Value;
+        if (maximum.HasValue) property["maximum"] = maximum.Value;
+        return property;
+    }
 }
