@@ -1,6 +1,8 @@
 using System;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using VSAgent.Services.Omp;
@@ -9,45 +11,50 @@ using VSAgent.Ui;
 namespace VSAgent.Views
 {
     /// <summary>
-    /// Compact, expandable card that renders an ACP tool call inside the
-    /// chat transcript. Defaults to collapsed; user can expand to see input
-    /// (rendered as JSON) and output (rendered as Markdown-ish block).
+    /// Compact theme-aware ACP tool-call card. Colored status indicators are
+    /// decorative only; all state is also represented as text.
     /// </summary>
     public class ToolCallCard : Expander
     {
         public AcpToolCall Call { get; set; }
+
         private TextBlock statusBadge;
         private TextBlock titleText;
-        private TextBlock metaText;
         private TextBox inputView;
         private FlowDocumentScrollViewer outputView;
+        private Ellipse statusIndicator;
 
         public ToolCallCard(AcpToolCall call)
         {
-            Call = call;
+            Call = call ?? throw new ArgumentNullException(nameof(call));
             Margin = new Thickness(0, 4, 0, 4);
             Padding = new Thickness(0);
             BorderThickness = new Thickness(1);
-            BorderBrush = new SolidColorBrush(Color.FromRgb(0x4A, 0x4A, 0x50));
-            Background = new SolidColorBrush(Color.FromRgb(0x1F, 0x1F, 0x22));
-            Foreground = Brushes.White;
             IsExpanded = false;
             HorizontalAlignment = HorizontalAlignment.Stretch;
             HorizontalContentAlignment = HorizontalAlignment.Stretch;
+            UseLayoutRounding = true;
+            SnapsToDevicePixels = true;
+            Style = StyleFactory.ExpanderStyle();
 
+            AutomationProperties.SetName(this, "Tool call " + (Call.Name ?? Call.Preview ?? string.Empty));
             BuildHeader();
             BuildBody();
         }
 
         private void BuildHeader()
         {
-            var grid = new Grid();
+            var grid = new Grid
+            {
+                Margin = new Thickness(2),
+                UseLayoutRounding = true
+            };
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(18) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-            var icon = new Ellipse
+            statusIndicator = new Ellipse
             {
                 Width = 8,
                 Height = 8,
@@ -56,31 +63,34 @@ namespace VSAgent.Views
                 Margin = new Thickness(6, 0, 2, 0),
                 Fill = StatusBrush()
             };
-            Grid.SetColumn(icon, 0);
-            grid.Children.Add(icon);
+            AutomationProperties.SetName(statusIndicator, Call.Status ?? "running");
+            Grid.SetColumn(statusIndicator, 0);
+            grid.Children.Add(statusIndicator);
 
             titleText = new TextBlock
             {
                 Text = string.IsNullOrEmpty(Call.Name) ? Call.Preview : (Call.Name + " · " + Call.Preview),
-                Foreground = Brushes.White,
                 FontWeight = FontWeights.SemiBold,
                 TextTrimming = TextTrimming.CharacterEllipsis,
-                VerticalAlignment = VerticalAlignment.Center
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(2, 4, 4, 4)
             };
+            titleText.SetResourceReference(TextBlock.ForegroundProperty, VsTheme.ForegroundKey);
             Grid.SetColumn(titleText, 1);
             grid.Children.Add(titleText);
 
             statusBadge = new TextBlock
             {
                 Text = Call.Status ?? "running",
-                Padding = new Thickness(6, 1, 6, 1),
+                Padding = new Thickness(7, 2, 7, 2),
                 Margin = new Thickness(6, 0, 6, 0),
-                FontSize = 10,
+                FontSize = 11,
                 FontWeight = FontWeights.SemiBold,
-                Foreground = Brushes.White,
-                Background = StatusBrush(),
                 VerticalAlignment = VerticalAlignment.Center
             };
+            statusBadge.SetResourceReference(TextBlock.ForegroundProperty, VsTheme.ForegroundKey);
+            statusBadge.SetResourceReference(TextBlock.BackgroundProperty, VsTheme.AccentPaleKey);
+            AutomationProperties.SetName(statusBadge, "Status " + statusBadge.Text);
             Grid.SetColumn(statusBadge, 2);
             grid.Children.Add(statusBadge);
 
@@ -88,12 +98,13 @@ namespace VSAgent.Views
             {
                 Text = (Call.Kind ?? "other").ToUpperInvariant(),
                 FontSize = 10,
-                Padding = new Thickness(4, 1, 4, 1),
-                Foreground = new SolidColorBrush(Color.FromRgb(0xCC, 0xCC, 0xCC)),
-                Background = new SolidColorBrush(Color.FromRgb(0x35, 0x35, 0x3A)),
+                FontWeight = FontWeights.SemiBold,
+                Padding = new Thickness(5, 2, 5, 2),
                 Margin = new Thickness(0, 0, 6, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
+            kind.SetResourceReference(TextBlock.ForegroundProperty, VsTheme.ForegroundKey);
+            kind.SetResourceReference(TextBlock.BackgroundProperty, VsTheme.BackgroundKey);
             Grid.SetColumn(kind, 3);
             grid.Children.Add(kind);
 
@@ -106,14 +117,9 @@ namespace VSAgent.Views
 
             if (!string.IsNullOrEmpty(Call.InputJson))
             {
-                var inputLabel = new TextBlock
-                {
-                    Text = "Input",
-                    FontWeight = FontWeights.SemiBold,
-                    FontSize = 11,
-                    Margin = new Thickness(0, 4, 0, 2),
-                    Foreground = new SolidColorBrush(Color.FromRgb(0xCC, 0xCC, 0xCC))
-                };
+                var inputLabel = WorkbenchUi.Label("Input");
+                inputLabel.FontSize = 11;
+                inputLabel.Margin = new Thickness(0, 4, 0, 2);
                 stack.Children.Add(inputLabel);
 
                 inputView = new TextBox
@@ -122,38 +128,36 @@ namespace VSAgent.Views
                     IsReadOnly = true,
                     FontFamily = new FontFamily("Consolas"),
                     FontSize = 12,
-                    Background = new SolidColorBrush(Color.FromRgb(0x14, 0x14, 0x18)),
-                    Foreground = new SolidColorBrush(Color.FromRgb(0xCF, 0xCF, 0xCF)),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(0x40, 0x40, 0x45)),
-                    BorderThickness = new Thickness(1),
-                    Padding = new Thickness(6, 4, 6, 4),
+                    Style = StyleFactory.TextBoxStyle(),
+                    Padding = new Thickness(7, 5, 7, 5),
                     TextWrapping = TextWrapping.Wrap,
-                    MaxHeight = 120,
-                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+                    MaxHeight = 140,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Auto
                 };
+                AutomationProperties.SetName(inputView, "Tool input");
                 stack.Children.Add(inputView);
             }
 
-            var outputLabel = new TextBlock
-            {
-                Text = "Output",
-                FontWeight = FontWeights.SemiBold,
-                FontSize = 11,
-                Margin = new Thickness(0, 6, 0, 2),
-                Foreground = new SolidColorBrush(Color.FromRgb(0xCC, 0xCC, 0xCC))
-            };
+            var outputLabel = WorkbenchUi.Label("Output");
+            outputLabel.FontSize = 11;
+            outputLabel.Margin = new Thickness(0, 7, 0, 2);
             stack.Children.Add(outputLabel);
 
             outputView = new FlowDocumentScrollViewer
             {
                 Document = Markdown.Parse(string.IsNullOrEmpty(Call.Output) ? "_(no output yet)_" : Call.Output),
-                Background = new SolidColorBrush(Color.FromRgb(0x14, 0x14, 0x18)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(0x40, 0x40, 0x45)),
                 BorderThickness = new Thickness(1),
-                Padding = new Thickness(6, 4, 6, 4),
-                MaxHeight = 240,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+                Padding = new Thickness(7, 5, 7, 5),
+                MaxHeight = 260,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                IsToolBarVisible = false,
+                UseLayoutRounding = true
             };
+            outputView.SetResourceReference(FlowDocumentScrollViewer.BackgroundProperty, VsTheme.BackgroundKey);
+            outputView.SetResourceReference(FlowDocumentScrollViewer.ForegroundProperty, VsTheme.ForegroundKey);
+            outputView.SetResourceReference(FlowDocumentScrollViewer.BorderBrushProperty, VsTheme.BorderKey);
+            AutomationProperties.SetName(outputView, "Tool output");
             stack.Children.Add(outputView);
 
             Content = stack;
@@ -161,10 +165,14 @@ namespace VSAgent.Views
 
         private Brush StatusBrush()
         {
-            var s = (Call.Status ?? "running").ToLowerInvariant();
-            if (s.Contains("complete") || s.Contains("success")) return new SolidColorBrush(Color.FromRgb(0x2E, 0x9F, 0x4D));
-            if (s.Contains("fail") || s.Contains("error")) return new SolidColorBrush(Color.FromRgb(0xD9, 0x36, 0x36));
-            return new SolidColorBrush(Color.FromRgb(0x4F, 0xC3, 0xF7));
+            if (VsTheme.IsHighContrast) return SystemColors.HighlightBrush;
+
+            var status = (Call.Status ?? "running").ToLowerInvariant();
+            if (status.Contains("complete") || status.Contains("success"))
+                return new SolidColorBrush(Color.FromRgb(0x2E, 0x8B, 0x57));
+            if (status.Contains("fail") || status.Contains("error"))
+                return new SolidColorBrush(Color.FromRgb(0xC4, 0x2B, 0x1C));
+            return VsTheme.Brush(VsTheme.AccentMediumKey, SystemColors.HighlightBrush);
         }
     }
 }
