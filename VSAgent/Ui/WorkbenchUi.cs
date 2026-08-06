@@ -1,8 +1,10 @@
 using Microsoft.VisualStudio.Shell;
 using System;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Media;
 
 namespace VSAgent.Ui
 {
@@ -16,11 +18,13 @@ namespace VSAgent.Ui
                 Margin = margin ?? new Thickness(0, 0, 0, 10),
                 Padding = padding ?? new Thickness(12),
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(6),
-                SnapsToDevicePixels = true
+                CornerRadius = new CornerRadius(5),
+                SnapsToDevicePixels = true,
+                UseLayoutRounding = true
             };
             card.SetResourceReference(Border.BackgroundProperty, VsBrushes.ToolWindowBackgroundKey);
             card.SetResourceReference(Border.BorderBrushProperty, VsBrushes.ToolWindowBorderKey);
+            TextOptions.SetTextFormattingMode(card, TextFormattingMode.Display);
             return card;
         }
 
@@ -32,9 +36,11 @@ namespace VSAgent.Ui
                 FontSize = size,
                 FontWeight = FontWeights.SemiBold,
                 TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 0, 0, 3)
+                Margin = new Thickness(0, 0, 0, 3),
+                UseLayoutRounding = true
             };
             value.SetResourceReference(TextBlock.ForegroundProperty, VsBrushes.ToolWindowTextKey);
+            AutomationProperties.SetName(value, text);
             return value;
         }
 
@@ -45,9 +51,11 @@ namespace VSAgent.Ui
                 Text = text,
                 FontSize = 12,
                 TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 0, 0, 10)
+                Margin = new Thickness(0, 0, 0, 10),
+                Opacity = VsTheme.IsHighContrast ? 1.0 : 0.86,
+                UseLayoutRounding = true
             };
-            value.SetResourceReference(TextBlock.ForegroundProperty, VsBrushes.GrayTextKey);
+            value.SetResourceReference(TextBlock.ForegroundProperty, VsBrushes.ToolWindowTextKey);
             return value;
         }
 
@@ -58,9 +66,11 @@ namespace VSAgent.Ui
                 Text = text,
                 FontSize = 12,
                 FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(0, 6, 0, 3)
+                Margin = new Thickness(0, 7, 0, 4),
+                UseLayoutRounding = true
             };
             value.SetResourceReference(TextBlock.ForegroundProperty, VsBrushes.ToolWindowTextKey);
+            AutomationProperties.SetName(value, text);
             return value;
         }
 
@@ -70,36 +80,50 @@ namespace VSAgent.Ui
             {
                 Content = text,
                 Style = accent ? StyleFactory.AccentButtonStyle() : StyleFactory.ButtonStyle(),
-                ToolTip = toolTip
+                ToolTip = toolTip,
+                Focusable = true
             };
+            AutomationProperties.SetName(value, text);
+            if (!string.IsNullOrWhiteSpace(toolTip))
+                AutomationProperties.SetHelpText(value, toolTip);
             if (click != null) value.Click += click;
             return value;
         }
 
         public static TextBox TextBox(string text = null, bool multiLine = false)
         {
-            return new TextBox
+            var value = new TextBox
             {
                 Text = text ?? string.Empty,
                 Style = StyleFactory.TextBoxStyle(),
                 AcceptsReturn = multiLine,
+                AcceptsTab = multiLine,
                 TextWrapping = multiLine ? TextWrapping.Wrap : TextWrapping.NoWrap,
                 VerticalScrollBarVisibility = multiLine ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled,
                 HorizontalScrollBarVisibility = multiLine ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled
             };
+            TextOptions.SetTextFormattingMode(value, TextFormattingMode.Display);
+            return value;
         }
 
         public static CheckBox CheckBox(string text, bool isChecked = false)
         {
-            return new CheckBox
+            var value = new CheckBox
             {
                 Content = text,
                 IsChecked = isChecked,
                 Style = StyleFactory.CheckBoxStyle()
             };
+            AutomationProperties.SetName(value, text);
+            return value;
         }
 
-        public static ComboBox ComboBox() => new ComboBox { Style = StyleFactory.ComboBoxStyle() };
+        public static ComboBox ComboBox()
+        {
+            var value = new ComboBox { Style = StyleFactory.ComboBoxStyle() };
+            TextOptions.SetTextFormattingMode(value, TextFormattingMode.Display);
+            return value;
+        }
 
         public static ListBox ListBox(SelectionMode selectionMode = SelectionMode.Single)
         {
@@ -107,7 +131,8 @@ namespace VSAgent.Ui
             {
                 Style = StyleFactory.ListBoxStyle(),
                 ItemContainerStyle = StyleFactory.ListBoxItemStyle(),
-                SelectionMode = selectionMode
+                SelectionMode = selectionMode,
+                UseLayoutRounding = true
             };
             ScrollViewer.SetVerticalScrollBarVisibility(value, ScrollBarVisibility.Auto);
             ScrollViewer.SetHorizontalScrollBarVisibility(value, ScrollBarVisibility.Auto);
@@ -126,53 +151,67 @@ namespace VSAgent.Ui
                 VerticalAlignment = VerticalAlignment.Center
             };
             label.SetResourceReference(TextBlock.ForegroundProperty, VsBrushes.ToolWindowTextKey);
+
             var border = new Border
             {
                 Child = label,
                 Padding = new Thickness(7, 2, 7, 2),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(10),
-                Margin = new Thickness(0, 0, 6, 0)
+                Margin = new Thickness(0, 0, 6, 0),
+                UseLayoutRounding = true
             };
-            border.SetResourceReference(Border.BackgroundProperty, VsBrushes.ToolWindowBackgroundKey);
-            border.SetResourceReference(Border.BorderBrushProperty, VsBrushes.ToolWindowBorderKey);
+            border.SetResourceReference(Border.BackgroundProperty, VsBrushes.AccentPaleKey);
+            border.SetResourceReference(Border.BorderBrushProperty, VsBrushes.AccentMediumKey);
+            AutomationProperties.SetName(border, text);
             return border;
         }
 
         public static Grid PageHeader(string title, string subtitle, UIElement actions = null)
         {
-            var grid = new Grid { Margin = new Thickness(0, 0, 0, 12) };
+            var grid = new Grid
+            {
+                Margin = new Thickness(0, 0, 0, 12),
+                UseLayoutRounding = true
+            };
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
             var text = new StackPanel();
             text.Children.Add(Title(title));
             text.Children.Add(Subtitle(subtitle));
             grid.Children.Add(text);
+
             if (actions != null)
             {
                 Grid.SetColumn(actions, 1);
                 if (actions is FrameworkElement element) element.VerticalAlignment = VerticalAlignment.Top;
                 grid.Children.Add(actions);
             }
+
             return grid;
         }
 
         public static ScrollViewer PageScroll(UIElement child)
         {
-            return new ScrollViewer
+            var viewer = new ScrollViewer
             {
                 Content = child,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                Padding = new Thickness(14)
+                Padding = new Thickness(14),
+                PanningMode = PanningMode.VerticalFirst,
+                IsTabStop = false,
+                UseLayoutRounding = true
             };
+            TextOptions.SetTextFormattingMode(viewer, TextFormattingMode.Display);
+            return viewer;
         }
 
         public static void ApplyToolWindowTheme(Control control)
         {
-            control.SetResourceReference(Control.BackgroundProperty, VsBrushes.ToolWindowBackgroundKey);
-            control.SetResourceReference(Control.ForegroundProperty, VsBrushes.ToolWindowTextKey);
-            control.SetResourceReference(Control.BorderBrushProperty, VsBrushes.ToolWindowBorderKey);
+            VsTheme.Apply(control);
+            TextOptions.SetTextFormattingMode(control, TextFormattingMode.Display);
         }
 
         public static string Truncate(string value, int maximum)

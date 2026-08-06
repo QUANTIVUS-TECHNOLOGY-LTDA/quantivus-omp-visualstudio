@@ -1,42 +1,45 @@
-using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Markup;
 using System.Windows.Media;
 
 namespace VSAgent.Ui
 {
     /// <summary>
-    /// Builds reusable Styles for Buttons, TextBoxes, ComboBoxes, CheckBoxes,
-    /// GroupBoxes, and TabItems that look good in light + dark VS themes.
+    /// Creates reusable controls that follow the active Visual Studio theme.
+    /// No light/dark colors are hard-coded: DynamicResource references update
+    /// automatically when Visual Studio changes theme or Windows enters
+    /// high-contrast mode.
     /// </summary>
     public static class StyleFactory
     {
         public static Style ButtonStyle()
         {
-            var s = new Style(typeof(Button));
-            s.Setters.Add(new Setter(FrameworkElement.MarginProperty, new Thickness(0, 4, 4, 4)));
-            s.Setters.Add(new Setter(FrameworkElement.MinWidthProperty, 72.0));
-            s.Setters.Add(new Setter(FrameworkElement.MinHeightProperty, 28.0));
-            s.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(12, 4, 12, 4)));
-            s.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
-            s.Setters.Add(new Setter(Control.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(0x60, 0x60, 0x60))));
-            s.Setters.Add(new Setter(Control.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0x2D, 0x2D, 0x30))));
-            s.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.White));
-            s.Setters.Add(new Setter(Control.FontWeightProperty, FontWeights.SemiBold));
-            s.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Center));
-            s.Setters.Add(new Setter(Control.VerticalContentAlignmentProperty, VerticalAlignment.Center));
-            s.Setters.Add(new Setter(Control.CursorProperty, Cursors.Hand));
-            s.Setters.Add(new Setter(Control.SnapsToDevicePixelsProperty, true));
+            var style = new Style(typeof(Button));
+            style.Setters.Add(new Setter(FrameworkElement.MarginProperty, new Thickness(0, 4, 4, 4)));
+            style.Setters.Add(new Setter(FrameworkElement.MinWidthProperty, 72.0));
+            style.Setters.Add(new Setter(FrameworkElement.MinHeightProperty, 30.0));
+            style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(12, 5, 12, 5)));
+            style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
+            style.Setters.Add(new Setter(Control.BorderBrushProperty, Resource(VsTheme.BorderKey)));
+            style.Setters.Add(new Setter(Control.BackgroundProperty, Resource(VsTheme.BackgroundKey)));
+            style.Setters.Add(new Setter(Control.ForegroundProperty, Resource(VsTheme.ForegroundKey)));
+            style.Setters.Add(new Setter(Control.FontWeightProperty, FontWeights.SemiBold));
+            style.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Center));
+            style.Setters.Add(new Setter(Control.VerticalContentAlignmentProperty, VerticalAlignment.Center));
+            style.Setters.Add(new Setter(Control.CursorProperty, Cursors.Hand));
+            style.Setters.Add(new Setter(Control.SnapsToDevicePixelsProperty, true));
+            style.Setters.Add(new Setter(FrameworkElement.UseLayoutRoundingProperty, true));
 
             var template = new ControlTemplate(typeof(Button));
             var border = new FrameworkElementFactory(typeof(Border));
-            border.Name = "Bd";
+            border.Name = "Border";
             border.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
             border.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(Control.BorderBrushProperty));
             border.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(Control.BorderThicknessProperty));
-            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
+            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
             border.SetValue(Border.SnapsToDevicePixelsProperty, true);
 
             var content = new FrameworkElementFactory(typeof(ContentPresenter));
@@ -44,137 +47,180 @@ namespace VSAgent.Ui
             content.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
             content.SetValue(ContentPresenter.MarginProperty, new TemplateBindingExtension(Control.PaddingProperty));
             content.SetValue(ContentPresenter.RecognizesAccessKeyProperty, true);
-
             border.AppendChild(content);
             template.VisualTree = border;
 
             var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
-            hover.Setters.Add(new Setter(Control.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0x40, 0x40, 0x44)), "Bd"));
-            hover.Setters.Add(new Setter(Control.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80)), "Bd"));
+            hover.Setters.Add(new Setter(Control.BackgroundProperty, Resource(VsTheme.AccentPaleKey), "Border"));
+            hover.Setters.Add(new Setter(Control.BorderBrushProperty, Resource(VsTheme.AccentMediumKey), "Border"));
             template.Triggers.Add(hover);
 
             var pressed = new Trigger { Property = Button.IsPressedProperty, Value = true };
-            pressed.Setters.Add(new Setter(Control.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0x1E, 0x1E, 0x22)), "Bd"));
+            pressed.Setters.Add(new Setter(Control.BackgroundProperty, Resource(VsTheme.AccentMediumKey), "Border"));
+            pressed.Setters.Add(new Setter(Control.ForegroundProperty, Resource(SystemColors.HighlightTextBrushKey)));
             template.Triggers.Add(pressed);
 
+            var focused = new Trigger { Property = UIElement.IsKeyboardFocusedProperty, Value = true };
+            focused.Setters.Add(new Setter(Control.BorderBrushProperty, Resource(SystemColors.HighlightBrushKey), "Border"));
+            focused.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(2), "Border"));
+            template.Triggers.Add(focused);
+
             var disabled = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
-            disabled.Setters.Add(new Setter(Control.OpacityProperty, 0.4));
+            disabled.Setters.Add(new Setter(Control.ForegroundProperty, Resource(VsTheme.SubtleKey)));
+            disabled.Setters.Add(new Setter(Control.OpacityProperty, 0.72));
             template.Triggers.Add(disabled);
 
-            s.Setters.Add(new Setter(Control.TemplateProperty, template));
-            return s;
+            style.Setters.Add(new Setter(Control.TemplateProperty, template));
+            return style;
         }
 
         public static Style AccentButtonStyle()
         {
-            var s = ButtonStyle();
-            s.Setters.Add(new Setter(Control.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0x00, 0x6B, 0xD9))));
-            s.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.White));
-            s.Setters.Add(new Setter(Control.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(0x00, 0x55, 0xB3))));
-            return s;
+            var style = ButtonStyle();
+            style.Setters.Add(new Setter(Control.BackgroundProperty, Resource(VsTheme.AccentMediumKey)));
+            style.Setters.Add(new Setter(Control.ForegroundProperty, Resource(SystemColors.HighlightTextBrushKey)));
+            style.Setters.Add(new Setter(Control.BorderBrushProperty, Resource(VsTheme.AccentDarkKey)));
+            return style;
         }
 
         public static Style TextBoxStyle()
         {
-            var s = new Style(typeof(TextBox));
-            s.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(6, 4, 6, 4)));
-            s.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
-            s.Setters.Add(new Setter(Control.MinHeightProperty, 24.0));
-            s.Setters.Add(new Setter(TextBoxBase.CaretBrushProperty, Brushes.White));
-            s.Setters.Add(new Setter(TextBox.SelectionBrushProperty, new SolidColorBrush(Color.FromRgb(0x00, 0x6B, 0xD9))));
-            s.Setters.Add(new Setter(TextBox.SelectionTextBrushProperty, Brushes.White));
-            s.Setters.Add(new Setter(Control.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(0x60, 0x60, 0x60))));
-            s.Setters.Add(new Setter(Control.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0x1F, 0x1F, 0x22))));
-            s.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.White));
-            s.Setters.Add(new Setter(Control.VerticalContentAlignmentProperty, VerticalAlignment.Center));
-            s.Setters.Add(new Setter(Control.SnapsToDevicePixelsProperty, true));
+            var style = new Style(typeof(TextBox));
+            AddInputSetters(style);
+            style.Setters.Add(new Setter(TextBoxBase.CaretBrushProperty, Resource(VsTheme.ForegroundKey)));
+            style.Setters.Add(new Setter(TextBox.SelectionBrushProperty, Resource(SystemColors.HighlightBrushKey)));
+            style.Setters.Add(new Setter(TextBox.SelectionTextBrushProperty, Resource(SystemColors.HighlightTextBrushKey)));
+
             var focus = new Trigger { Property = UIElement.IsKeyboardFocusWithinProperty, Value = true };
-            focus.Setters.Add(new Setter(Control.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(0x4F, 0xC3, 0xF7))));
-            s.Triggers.Add(focus);
-            return s;
+            focus.Setters.Add(new Setter(Control.BorderBrushProperty, Resource(SystemColors.HighlightBrushKey)));
+            focus.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(2)));
+            style.Triggers.Add(focus);
+
+            var readOnly = new Trigger { Property = TextBoxBase.IsReadOnlyProperty, Value = true };
+            readOnly.Setters.Add(new Setter(Control.BackgroundProperty, Resource(VsTheme.BackgroundKey)));
+            readOnly.Setters.Add(new Setter(Control.ForegroundProperty, Resource(VsTheme.ForegroundKey)));
+            style.Triggers.Add(readOnly);
+            return style;
         }
 
         public static Style PasswordBoxStyle()
         {
-            var s = new Style(typeof(PasswordBox));
-            s.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(6, 4, 6, 4)));
-            s.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
-            s.Setters.Add(new Setter(Control.MinHeightProperty, 24.0));
-            s.Setters.Add(new Setter(Control.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(0x60, 0x60, 0x60))));
-            s.Setters.Add(new Setter(Control.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0x1F, 0x1F, 0x22))));
-            s.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.White));
-            s.Setters.Add(new Setter(Control.VerticalContentAlignmentProperty, VerticalAlignment.Center));
-            return s;
+            var style = new Style(typeof(PasswordBox));
+            AddInputSetters(style);
+            var focus = new Trigger { Property = UIElement.IsKeyboardFocusWithinProperty, Value = true };
+            focus.Setters.Add(new Setter(Control.BorderBrushProperty, Resource(SystemColors.HighlightBrushKey)));
+            focus.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(2)));
+            style.Triggers.Add(focus);
+            return style;
         }
 
         public static Style ComboBoxStyle()
         {
-            var s = new Style(typeof(ComboBox));
-            s.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(6, 4, 6, 4)));
-            s.Setters.Add(new Setter(Control.MinHeightProperty, 28.0));
-            s.Setters.Add(new Setter(Control.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0x1F, 0x1F, 0x22))));
-            s.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.White));
-            s.Setters.Add(new Setter(Control.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(0x60, 0x60, 0x60))));
-            s.Setters.Add(new Setter(Control.VerticalContentAlignmentProperty, VerticalAlignment.Center));
-            return s;
+            var style = new Style(typeof(ComboBox));
+            style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(7, 4, 7, 4)));
+            style.Setters.Add(new Setter(Control.MinHeightProperty, 30.0));
+            style.Setters.Add(new Setter(Control.BackgroundProperty, Resource(VsTheme.BackgroundKey)));
+            style.Setters.Add(new Setter(Control.ForegroundProperty, Resource(VsTheme.ForegroundKey)));
+            style.Setters.Add(new Setter(Control.BorderBrushProperty, Resource(VsTheme.BorderKey)));
+            style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
+            style.Setters.Add(new Setter(Control.VerticalContentAlignmentProperty, VerticalAlignment.Center));
+            style.Setters.Add(new Setter(Control.SnapsToDevicePixelsProperty, true));
+            style.Setters.Add(new Setter(FrameworkElement.UseLayoutRoundingProperty, true));
+
+            var focus = new Trigger { Property = UIElement.IsKeyboardFocusWithinProperty, Value = true };
+            focus.Setters.Add(new Setter(Control.BorderBrushProperty, Resource(SystemColors.HighlightBrushKey)));
+            style.Triggers.Add(focus);
+            return style;
         }
 
         public static Style CheckBoxStyle()
         {
-            var s = new Style(typeof(CheckBox));
-            s.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.White));
-            s.Setters.Add(new Setter(FrameworkElement.MarginProperty, new Thickness(0, 4, 0, 4)));
-            s.Setters.Add(new Setter(Control.VerticalContentAlignmentProperty, VerticalAlignment.Center));
-            return s;
+            var style = new Style(typeof(CheckBox));
+            style.Setters.Add(new Setter(Control.ForegroundProperty, Resource(VsTheme.ForegroundKey)));
+            style.Setters.Add(new Setter(FrameworkElement.MarginProperty, new Thickness(0, 5, 0, 5)));
+            style.Setters.Add(new Setter(Control.MinHeightProperty, 24.0));
+            style.Setters.Add(new Setter(Control.VerticalContentAlignmentProperty, VerticalAlignment.Center));
+            return style;
         }
 
         public static Style GroupBoxStyle()
         {
-            var s = new Style(typeof(GroupBox));
-            s.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(10, 8, 10, 8)));
-            s.Setters.Add(new Setter(Control.MarginProperty, new Thickness(0, 0, 0, 8)));
-            s.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
-            s.Setters.Add(new Setter(Control.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(0x50, 0x50, 0x55))));
-            s.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.White));
-            s.Setters.Add(new Setter(Control.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0x18, 0x18, 0x1A))));
-            s.Setters.Add(new Setter(Control.FontWeightProperty, FontWeights.SemiBold));
-            return s;
+            var style = new Style(typeof(GroupBox));
+            style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(10, 8, 10, 8)));
+            style.Setters.Add(new Setter(Control.MarginProperty, new Thickness(0, 0, 0, 8)));
+            style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
+            style.Setters.Add(new Setter(Control.BorderBrushProperty, Resource(VsTheme.BorderKey)));
+            style.Setters.Add(new Setter(Control.ForegroundProperty, Resource(VsTheme.ForegroundKey)));
+            style.Setters.Add(new Setter(Control.BackgroundProperty, Resource(VsTheme.BackgroundKey)));
+            style.Setters.Add(new Setter(Control.FontWeightProperty, FontWeights.SemiBold));
+            style.Setters.Add(new Setter(FrameworkElement.UseLayoutRoundingProperty, true));
+            return style;
         }
 
         public static Style ListBoxStyle()
         {
-            var s = new Style(typeof(ListBox));
-            s.Setters.Add(new Setter(Control.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0x1F, 0x1F, 0x22))));
-            s.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.White));
-            s.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
-            s.Setters.Add(new Setter(Control.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(0x50, 0x50, 0x55))));
-            return s;
+            var style = new Style(typeof(ListBox));
+            style.Setters.Add(new Setter(Control.BackgroundProperty, Resource(VsTheme.BackgroundKey)));
+            style.Setters.Add(new Setter(Control.ForegroundProperty, Resource(VsTheme.ForegroundKey)));
+            style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
+            style.Setters.Add(new Setter(Control.BorderBrushProperty, Resource(VsTheme.BorderKey)));
+            style.Setters.Add(new Setter(Control.SnapsToDevicePixelsProperty, true));
+            return style;
         }
 
         public static Style ListBoxItemStyle()
         {
-            var s = new Style(typeof(ListBoxItem));
-            s.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(6, 4, 6, 4)));
-            s.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.White));
-            s.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.Transparent));
-            var sel = new Trigger { Property = ListBoxItem.IsSelectedProperty, Value = true };
-            sel.Setters.Add(new Setter(Control.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0x00, 0x6B, 0xD9))));
-            sel.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.White));
-            s.Triggers.Add(sel);
-            var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
-            hover.Setters.Add(new Setter(Control.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0x35, 0x35, 0x3A))));
-            s.Triggers.Add(hover);
-            return s;
+            var style = new Style(typeof(ListBoxItem));
+            style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(7, 5, 7, 5)));
+            style.Setters.Add(new Setter(Control.ForegroundProperty, Resource(VsTheme.ForegroundKey)));
+            style.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.Transparent));
+            style.Setters.Add(new Setter(Control.BorderBrushProperty, Brushes.Transparent));
+            style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
+            style.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Stretch));
+
+            var selected = new Trigger { Property = ListBoxItem.IsSelectedProperty, Value = true };
+            selected.Setters.Add(new Setter(Control.BackgroundProperty, Resource(SystemColors.HighlightBrushKey)));
+            selected.Setters.Add(new Setter(Control.ForegroundProperty, Resource(SystemColors.HighlightTextBrushKey)));
+            selected.Setters.Add(new Setter(Control.BorderBrushProperty, Resource(SystemColors.HighlightBrushKey)));
+            style.Triggers.Add(selected);
+
+            var hover = new MultiTrigger();
+            hover.Conditions.Add(new Condition(UIElement.IsMouseOverProperty, true));
+            hover.Conditions.Add(new Condition(ListBoxItem.IsSelectedProperty, false));
+            hover.Setters.Add(new Setter(Control.BackgroundProperty, Resource(VsTheme.AccentPaleKey)));
+            hover.Setters.Add(new Setter(Control.BorderBrushProperty, Resource(VsTheme.AccentMediumKey)));
+            style.Triggers.Add(hover);
+
+            var focused = new Trigger { Property = UIElement.IsKeyboardFocusWithinProperty, Value = true };
+            focused.Setters.Add(new Setter(Control.BorderBrushProperty, Resource(SystemColors.HighlightBrushKey)));
+            style.Triggers.Add(focused);
+            return style;
         }
 
         public static Style ExpanderStyle()
         {
-            var s = new Style(typeof(Expander));
-            s.Setters.Add(new Setter(FrameworkElement.MarginProperty, new Thickness(0, 0, 0, 4)));
-            s.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.White));
-            s.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.Transparent));
-            s.Setters.Add(new Setter(Control.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(0x50, 0x50, 0x55))));
-            return s;
+            var style = new Style(typeof(Expander));
+            style.Setters.Add(new Setter(FrameworkElement.MarginProperty, new Thickness(0, 0, 0, 4)));
+            style.Setters.Add(new Setter(Control.ForegroundProperty, Resource(VsTheme.ForegroundKey)));
+            style.Setters.Add(new Setter(Control.BackgroundProperty, Resource(VsTheme.BackgroundKey)));
+            style.Setters.Add(new Setter(Control.BorderBrushProperty, Resource(VsTheme.BorderKey)));
+            style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
+            return style;
         }
+
+        private static void AddInputSetters(Style style)
+        {
+            style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(7, 5, 7, 5)));
+            style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
+            style.Setters.Add(new Setter(Control.MinHeightProperty, 30.0));
+            style.Setters.Add(new Setter(Control.BorderBrushProperty, Resource(VsTheme.BorderKey)));
+            style.Setters.Add(new Setter(Control.BackgroundProperty, Resource(VsTheme.BackgroundKey)));
+            style.Setters.Add(new Setter(Control.ForegroundProperty, Resource(VsTheme.ForegroundKey)));
+            style.Setters.Add(new Setter(Control.VerticalContentAlignmentProperty, VerticalAlignment.Center));
+            style.Setters.Add(new Setter(Control.SnapsToDevicePixelsProperty, true));
+            style.Setters.Add(new Setter(FrameworkElement.UseLayoutRoundingProperty, true));
+        }
+
+        private static DynamicResourceExtension Resource(object key) => new DynamicResourceExtension(key);
     }
 }
