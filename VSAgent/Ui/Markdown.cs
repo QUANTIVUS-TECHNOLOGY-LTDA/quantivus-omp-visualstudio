@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
@@ -80,9 +81,7 @@ namespace VSAgent.Ui
                     while (i < lines.Length && (lines[i].StartsWith("- ", StringComparison.Ordinal) || lines[i].StartsWith("* ", StringComparison.Ordinal)))
                     {
                         var item = lines[i].Substring(2).Trim();
-                        var p = new Paragraph(new Run(item)) { Margin = new Thickness(0) };
-                        ReplaceInlines(p);
-                        list.ListItems.Add(new ListItem(p));
+                        list.ListItems.Add(new ListItem(BuildParagraph(item, new Thickness(0))));
                         i++;
                     }
                     doc.Blocks.Add(list);
@@ -96,9 +95,7 @@ namespace VSAgent.Ui
                     while (i < lines.Length && Regex.IsMatch(lines[i], @"^\d+\.\s"))
                     {
                         var item = Regex.Replace(lines[i], @"^\d+\.\s", "");
-                        var p = new Paragraph(new Run(item)) { Margin = new Thickness(0) };
-                        ReplaceInlines(p);
-                        list.ListItems.Add(new ListItem(p));
+                        list.ListItems.Add(new ListItem(BuildParagraph(item, new Thickness(0))));
                         i++;
                     }
                     doc.Blocks.Add(list);
@@ -106,8 +103,7 @@ namespace VSAgent.Ui
                 }
 
                 // paragraph (consume until blank line)
-                var para = new Paragraph { Margin = new Thickness(0, 0, 0, 8) };
-                para.Inlines.Add(new Run(line));
+                var buf = new StringBuilder(line);
                 i++;
                 while (i < lines.Length && !string.IsNullOrWhiteSpace(lines[i]) &&
                        !lines[i].StartsWith("#", StringComparison.Ordinal) &&
@@ -116,11 +112,10 @@ namespace VSAgent.Ui
                        !lines[i].StartsWith("* ", StringComparison.Ordinal) &&
                        !Regex.IsMatch(lines[i], @"^\d+\.\s"))
                 {
-                    para.Inlines.Add(new Run(" " + lines[i]));
+                    buf.Append(' ').Append(lines[i]);
                     i++;
                 }
-                ReplaceInlines(para);
-                doc.Blocks.Add(para);
+                doc.Blocks.Add(BuildParagraph(buf.ToString(), new Thickness(0, 0, 0, 8)));
             }
             return doc;
         }
@@ -128,13 +123,9 @@ namespace VSAgent.Ui
         private static Paragraph Heading(int level, string text)
         {
             double size = level switch { 1 => 20, 2 => 17, _ => 14 };
-            var p = new Paragraph(new Run(text))
-            {
-                FontWeight = FontWeights.Bold,
-                FontSize = size,
-                Margin = new Thickness(0, 8, 0, 4)
-            };
-            ReplaceInlines(p);
+            var p = BuildParagraph(text, new Thickness(0, 8, 0, 4));
+            p.FontWeight = FontWeights.Bold;
+            p.FontSize = size;
             return p;
         }
 
@@ -162,11 +153,15 @@ namespace VSAgent.Ui
             return container;
         }
 
-        private static void ReplaceInlines(Paragraph p)
+        private static Paragraph BuildParagraph(string text, Thickness margin)
         {
-            var text = p.Inlines.ToString();
-            if (string.IsNullOrEmpty(text)) return;
-            p.Inlines.Clear();
+            var p = new Paragraph { Margin = margin };
+            AddInlineRuns(p, text ?? string.Empty);
+            return p;
+        }
+
+        private static void AddInlineRuns(Paragraph p, string text)
+        {
             int idx = 0;
             while (idx < text.Length)
             {
