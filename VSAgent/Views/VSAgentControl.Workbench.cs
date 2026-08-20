@@ -138,6 +138,13 @@ namespace VSAgent.Views
             return diagnosticsView;
         }
 
+        private UIElement CreateDllSpyPage()
+        {
+            var view = new DllSpyView();
+            view.LoadInitialFromPreferences();
+            return view;
+        }
+
         private void InitializeWorkbenchBehaviors()
         {
             EnsureWorkbenchStore();

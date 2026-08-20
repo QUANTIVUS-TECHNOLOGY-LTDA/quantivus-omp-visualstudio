@@ -29,6 +29,7 @@ namespace VSAgent.Views
         private readonly ObservableCollection<ChatHistoryEntry> chatHistory;
         private readonly ContextUsageTracker contextUsage = new ContextUsageTracker();
         private readonly CommandCompletionPopup commandPopup;
+        private readonly ImageAttachmentService imageAttachments = new ImageAttachmentService();
         private SettingsView settingsView;
 
         private CancellationTokenSource currentCancellationTokenSource;
@@ -62,9 +63,9 @@ namespace VSAgent.Views
             PromptTextBox.TextChanged += PromptTextBox_TextChanged;
             PromptTextBox.GotFocus += (_, __) => PromptTextBox.Text = StripPlaceholder(PromptTextBox.Text);
             PromptTextBox.LostFocus += (_, __) => { if (string.IsNullOrWhiteSpace(PromptTextBox.Text)) PromptTextBox.Text = PromptPlaceholder; };
-
-            PreviewKeyDown += VSAgentControl_PreviewKeyDown;
-
+            DataObject.AddPastingHandler(PromptTextBox, PromptTextBox_Pasting);
+            PromptTextBox.PreviewDragOver += PromptTextBox_DragOver;
+            PromptTextBox.Drop += PromptTextBox_Drop;
             Loaded += OnLoaded;
             Unloaded += OnUnloaded;
         }
@@ -321,6 +322,8 @@ namespace VSAgent.Views
 
         private void BeginUserTurn(string prompt)
         {
+            if (WelcomeOverlay != null && WelcomeOverlay.Visibility != Visibility.Collapsed)
+                WelcomeOverlay.Visibility = Visibility.Collapsed;
             userMessageCard = new Border
             {
                 Background = new SolidColorBrush(Color.FromRgb(0x00, 0x6B, 0xD9)),
@@ -480,6 +483,127 @@ namespace VSAgent.Views
         }
 
         private void PromptTextBox_KeyDown(object sender, KeyEventArgs e) { /* preview handles everything */ }
+
+
+        // ---- Paste / Drop attachments ----
+        private void PromptTextBox_Pasting(object sender, DataObjectPastingEventArgs e)
+        {
+            var bitmap = ImageAttachmentService.TryReadBitmapSource(e.DataObject?.GetData(DataFormats.Bitmap));
+            if (bitmap == null) return;
+
+            try
+            {
+                var bitmapSource = bitmap as System.Windows.Media.Imaging.BitmapSource;
+                if (bitmapSource == null) return;
+                var path = SaveBitmapSourceAsImage(bitmapSource);
+                e.CancelCommand();
+                InsertAttachmentReference(path);
+                SetTask("Pasted image attached.");
+            }
+            catch (Exception ex)
+            {
+                SetTask("Paste image failed: " + ex.Message);
+            }
+        }
+
+        private void PromptTextBox_DragOver(object sender, DragEventArgs e)
+        {
+            e.Effects = HasDroppableContent(e.Data) ? DragDropEffects.Copy : DragDropEffects.None;
+            e.Handled = true;
+        }
+
+        private void PromptTextBox_Drop(object sender, DragEventArgs e)
+        {
+            if (!HasDroppableContent(e.Data)) return;
+            e.Handled = true;
+            HandleDroppedData(e.Data);
+        }
+
+        private bool HasDroppableContent(IDataObject data)
+        {
+            if (data == null) return false;
+            if (data.GetDataPresent(DataFormats.Bitmap)) return true;
+            if (data.GetDataPresent(DataFormats.FileDrop)) return true;
+            if (data.GetDataPresent(DataFormats.Text)) return true;
+            return false;
+        }
+
+        private void HandleDroppedData(IDataObject data)
+        {
+            if (data == null) return;
+            var imageCount = 0;
+            var fileCount = 0;
+
+            var bitmap = ImageAttachmentService.TryReadBitmapSource(data.GetData(DataFormats.Bitmap));
+            if (bitmap != null)
+            {
+                try
+                {
+                    var bitmapSource = bitmap as System.Windows.Media.Imaging.BitmapSource;
+                    if (bitmapSource != null)
+                    {
+                        var path = SaveBitmapSourceAsImage(bitmapSource);
+                        InsertAttachmentReference(path);
+                        imageCount++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    SetTask("Drop image failed: " + ex.Message);
+                }
+            }
+
+            if (data.GetData(DataFormats.FileDrop) is string[] paths)
+            {
+                var textReferences = new List<string>();
+                foreach (var path in paths)
+                {
+                    if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) continue;
+                    var ingested = imageAttachments.IngestDroppedFile(path);
+                    if (ingested != null)
+                    {
+                        InsertAttachmentReference(ingested);
+                        imageCount++;
+                    }
+                    else
+                    {
+                        textReferences.Add(path);
+                        fileCount++;
+                    }
+                }
+                if (textReferences.Count > 0)
+                {
+                    AppendToPrompt("\r\n\r\nReferenced files:\r\n" +
+                        string.Join("\r\n", textReferences.Select(p => "- `" + p + "`")));
+                }
+            }
+            else if (imageCount == 0 && data.GetDataPresent(DataFormats.Text))
+            {
+                var text = data.GetData(DataFormats.Text) as string;
+                if (!string.IsNullOrEmpty(text)) AppendToPrompt(text);
+            }
+
+            if (imageCount > 0 || fileCount > 0)
+                SetTask((imageCount > 0 ? imageCount + " image(s) attached. " : string.Empty) +
+                        (fileCount > 0 ? fileCount + " file(s) attached." : string.Empty));
+        }
+
+        private void InsertAttachmentReference(string fullPath)
+        {
+            var reference = imageAttachments.FormatAttachmentReference(fullPath);
+            AppendToPrompt(reference);
+        }
+
+        private string SaveBitmapSourceAsImage(System.Windows.Media.Imaging.BitmapSource bitmap)
+        {
+            var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+            encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
+            using var stream = new MemoryStream();
+            encoder.Save(stream);
+            stream.Position = 0;
+            using var image = System.Drawing.Image.FromStream(stream);
+            return imageAttachments.SaveClipboardImage(image);
+        }
 
         private void VSAgentControl_PreviewKeyDown(object sender, KeyEventArgs e)
         {

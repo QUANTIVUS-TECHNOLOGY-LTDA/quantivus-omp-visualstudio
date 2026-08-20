@@ -168,8 +168,9 @@ internal sealed class McpStdioServer
     }
 
     private static JsonArray CreateTools() => new(
-        Tool("vs_get_status", "Get the current Visual Studio solution and debugger state.", EmptySchema()),
+        Tool("vs_get_status", "Get the current Visual Studio solution and debugger state, including last break reason, current process/thread, breakpoint count and debugged-process count.", EmptySchema()),
         Tool("vs_get_solution", "List the open solution and its projects.", EmptySchema()),
+        Tool("vs_get_solution_properties", "Read the active solution configuration, available configurations/platforms, build state and last-build result.", EmptySchema()),
         Tool("vs_build_solution", "Build the open Visual Studio solution and wait for completion.", EmptySchema()),
         Tool("vs_rebuild_solution", "Clean and rebuild the open Visual Studio solution.", EmptySchema()),
         Tool("vs_debug_start", "Start or continue debugging the configured startup project.", EmptySchema()),
@@ -179,20 +180,91 @@ internal sealed class McpStdioServer
         Tool("vs_debug_step_over", "Execute Step Over in the Visual Studio debugger.", EmptySchema()),
         Tool("vs_debug_step_into", "Execute Step Into in the Visual Studio debugger.", EmptySchema()),
         Tool("vs_debug_step_out", "Execute Step Out in the Visual Studio debugger.", EmptySchema()),
-        Tool("vs_breakpoint_add", "Add a source breakpoint in Visual Studio.", ObjectSchema(
+        Tool("vs_breakpoint_add", "Add a source breakpoint in Visual Studio. Optionally accepts a 'condition' expression.", ObjectSchema(
+            required: ["file", "line"],
+            properties: new JsonObject
+            {
+                ["file"] = StringProperty("Absolute source file path."),
+                ["line"] = IntegerProperty("One-based source line number.", 1),
+                ["condition"] = StringProperty("Optional breakpoint condition expression.")
+            })),
+        Tool("vs_breakpoint_remove", "Remove a breakpoint by its 1-based index from vs_breakpoint_list.", ObjectSchema(
+            required: ["index"],
+            properties: new JsonObject
+            {
+                ["index"] = IntegerProperty("1-based breakpoint index.", 1)
+            })),
+        Tool("vs_breakpoint_remove_at", "Remove all breakpoints that match a file and line.", ObjectSchema(
             required: ["file", "line"],
             properties: new JsonObject
             {
                 ["file"] = StringProperty("Absolute source file path."),
                 ["line"] = IntegerProperty("One-based source line number.", 1)
             })),
-        Tool("vs_breakpoint_list", "List all Visual Studio breakpoints.", EmptySchema()),
+        Tool("vs_breakpoint_enable", "Enable a breakpoint by index.", ObjectSchema(
+            required: ["index"],
+            properties: new JsonObject
+            {
+                ["index"] = IntegerProperty("1-based breakpoint index.", 1)
+            })),
+        Tool("vs_breakpoint_disable", "Disable a breakpoint by index.", ObjectSchema(
+            required: ["index"],
+            properties: new JsonObject
+            {
+                ["index"] = IntegerProperty("1-based breakpoint index.", 1)
+            })),
+        Tool("vs_breakpoint_set_condition", "Replace a breakpoint with a copy that has a new condition expression.", ObjectSchema(
+            required: ["index", "condition"],
+            properties: new JsonObject
+            {
+                ["index"] = IntegerProperty("1-based breakpoint index.", 1),
+                ["condition"] = StringProperty("Conditional expression evaluated by the debugger.")
+            })),
+        Tool("vs_breakpoint_clear_all", "Remove every breakpoint in the solution.", EmptySchema()),
+        Tool("vs_breakpoint_list", "List all Visual Studio breakpoints with file, line, condition, hit count and enabled state.", EmptySchema()),
         Tool("vs_get_call_stack", "Read the current thread call stack while the debugger is paused.", EmptySchema()),
+        Tool("vs_get_call_stack_all_threads", "Read the call stack grouped by every debugged thread.", EmptySchema()),
+        Tool("vs_get_locals", "List local variables for the current stack frame while the debugger is paused.", EmptySchema()),
+        Tool("vs_get_arguments", "List method arguments for the current stack frame while the debugger is paused.", EmptySchema()),
         Tool("vs_evaluate", "Evaluate an expression in the current debugger stack frame.", ObjectSchema(
             required: ["expression"],
             properties: new JsonObject
             {
                 ["expression"] = StringProperty("Expression to evaluate in the current stack frame.")
+            })),
+        Tool("vs_list_threads", "List threads of the current debugged process with id, name, priority, location and stack depth.", EmptySchema()),
+        Tool("vs_list_processes", "List every debugged process with name, pid, user, thread count and module count.", EmptySchema()),
+        Tool("vs_get_current_thread", "Inspect the current thread: id, name, location and full call stack.", EmptySchema()),
+        Tool("vs_list_modules", "List loaded modules for the current debugged process with name, path, version, optimization state and address.", EmptySchema()),
+        Tool("vs_get_exception_info", "Return the type, description, source and details of the active exception (if any).", EmptySchema()),
+        Tool("vs_get_exception_settings", "Read the debugger's exception configuration flags.", EmptySchema()),
+        Tool("vs_get_environment_variables", "Read the host process environment variables. Accepts optional 'filter' (substring) and 'scope' arguments.", ObjectSchema(
+            required: [],
+            properties: new JsonObject
+            {
+                ["filter"] = StringProperty("Optional case-insensitive substring filter."),
+                ["scope"] = StringProperty("Optional scope label echoed back in the response.")
+            })),
+        Tool("vs_get_system_info", "Read static system information (machine, user, OS, processor count, page size, working set, CLR version).", EmptySchema()),
+        Tool("vs_get_process_info", "Read runtime diagnostics for an arbitrary OS process. Defaults to the currently debugged process when no pid is supplied.", ObjectSchema(
+            required: [],
+            properties: new JsonObject
+            {
+                ["pid"] = IntegerProperty("Process id. Defaults to the debugged process when omitted.", 1)
+            })),
+        Tool("vs_get_host_runtime", "Read runtime diagnostics for the Visual Studio host process: GC mode, working set, private bytes, thread count, handle count, CPU time.", EmptySchema()),
+        Tool("vs_analyze_assembly", "Inspect a .dll/.exe with the DLLSpy engine. Returns types, members, exports, assembly references and a force-directed dependency graph. The 'includeMembers' flag defaults to true and controls whether method/property/field bodies are returned.", ObjectSchema(
+            required: ["filePath"],
+            properties: new JsonObject
+            {
+                ["filePath"] = StringProperty("Absolute path to the .dll or .exe to inspect."),
+                ["includeMembers"] = StringProperty("Boolean flag rendered as a string ('true' / 'false'). Defaults to true.")
+            })),
+        Tool("vs_dependency_graph", "Return only the dependency graph (nodes + edges) for the given assembly. Lighter than vs_analyze_assembly for very large binaries.", ObjectSchema(
+            required: ["filePath"],
+            properties: new JsonObject
+            {
+                ["filePath"] = StringProperty("Absolute path to the .dll or .exe to inspect.")
             }))
     );
 
@@ -203,10 +275,19 @@ internal sealed class McpStdioServer
         ["inputSchema"] = inputSchema,
         ["annotations"] = new JsonObject
         {
-            ["readOnlyHint"] = name.StartsWith("vs_get_", StringComparison.Ordinal) || name.EndsWith("_list", StringComparison.Ordinal),
-            ["destructiveHint"] = name is "vs_debug_stop" or "vs_rebuild_solution"
+            ["readOnlyHint"] = IsReadOnlyTool(name),
+            ["destructiveHint"] = IsDestructiveTool(name)
         }
     };
+
+    private static bool IsReadOnlyTool(string name) =>
+        name.StartsWith("vs_get_", StringComparison.Ordinal) ||
+        name.EndsWith("_list", StringComparison.Ordinal) ||
+        name is "vs_list_threads" or "vs_list_processes" or "vs_list_modules";
+
+    private static bool IsDestructiveTool(string name) =>
+        name is "vs_debug_stop" or "vs_rebuild_solution" or "vs_breakpoint_clear_all"
+            or "vs_breakpoint_remove" or "vs_breakpoint_remove_at" or "vs_breakpoint_set_condition";
 
     private static JsonObject EmptySchema() => ObjectSchema([], new JsonObject());
 

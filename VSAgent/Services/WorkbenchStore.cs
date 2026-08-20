@@ -452,5 +452,7 @@ namespace VSAgent.Services
         public bool IncludeGitDiff { get; set; }
         public bool IncludeBuildErrors { get; set; }
         public int MaximumContextCharacters { get; set; } = 120000;
+        public string Language { get; set; } = "Auto";
+        public System.Collections.Generic.List<string> RecentAssemblies { get; set; } = new();
     }
 }
