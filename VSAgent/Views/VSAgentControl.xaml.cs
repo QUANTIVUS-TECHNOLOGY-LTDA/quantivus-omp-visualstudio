@@ -891,17 +891,20 @@ namespace VSAgent.Views
         {
             if (HistoryListBox.SelectedItem is ChatHistoryEntry entry)
             {
-                ShowResult(entry.OperationType + " - " + entry.Timestamp.ToString("g"), entry.Response);
+                ShowResult(entry.Prompt ?? string.Empty, entry.Response, beginUserTurn: true);
                 PromptTextBox.Text = entry.Prompt;
             }
         }
 
-        public void ShowResult(string title, string content)
+        public void ShowResult(string title, string content, bool beginUserTurn = false)
         {
             Dispatcher.Invoke(() =>
             {
                 if (WelcomeOverlay != null) WelcomeOverlay.Visibility = Visibility.Collapsed;
-                BeginUserTurn(title);
+                if (beginUserTurn)
+                {
+                    BeginUserTurn(title);
+                }
                 currentResponseBuffer = content ?? string.Empty;
                 EnsureAssistantCard();
                 currentResponseView.Document = Markdown.Parse(content ?? string.Empty);

@@ -180,8 +180,8 @@ namespace VSAgent.Views
             AddNavigationItem(list, "Context", "CX", "Inspectable prompt context");
             AddNavigationItem(list, "Prompts", "PR", "Reusable prompt library");
             AddNavigationItem(list, "Sessions", "SE", "Restore and export sessions");
+            AddNavigationItem(list, "Kanban", "KB", "Sequential task queue with agent profiles");
             AddNavigationItem(list, "Skills", "SK", "OMP skills");
-            AddNavigationItem(list, "Tools", "TL", "Custom MCP tools");
             AddNavigationItem(list, "Settings", "ST", "Provider and extension settings");
             AddNavigationItem(list, "Diagnostics", "DX", "Runtime and installation checks");
 
@@ -273,12 +273,11 @@ namespace VSAgent.Views
             AddTab(tabs, "Context", CreateContextPage());
             AddTab(tabs, "Prompts", CreatePromptsPage());
             AddTab(tabs, "Sessions", CreateSessionsPage());
+            AddTab(tabs, "Kanban", CreateKanbanPage());
 
             var skills = AddTab(tabs, "Skills", new SkillsPlaceholder());
             skills.Name = "SkillsTab";
             var tools = AddTab(tabs, "Tools", new ToolsPlaceholder());
-            AddTab(tabs, "DLLSpy", CreateDllSpyPage());
-            AddTab(tabs, "Diagnostics", CreateDiagnosticsPage());
 
             tabs.SelectedItem = ChatTab;
             return tabs;

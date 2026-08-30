@@ -47,6 +47,7 @@ namespace VSAgent.Views
         private ContextInspectorView contextInspectorView;
         private PromptLibraryView promptLibraryView;
         private SessionsWorkspaceView sessionsWorkspaceView;
+        private KanbanBoardView kanbanView;
         private DiagnosticsView diagnosticsView;
         private DispatcherTimer workbenchTimer;
         private ChatSession currentSession;
@@ -138,13 +139,21 @@ namespace VSAgent.Views
             return diagnosticsView;
         }
 
+        private UIElement CreateKanbanPage()
+        {
+            EnsureWorkbenchStore();
+            kanbanView = new KanbanBoardView(workbenchStore,
+                new KanbanQueueService(workbenchStore, VSAgentPackage.AgentHost),
+                VSAgentPackage.AgentHost);
+            return kanbanView;
+        }
+
         private UIElement CreateDllSpyPage()
         {
             var view = new DllSpyView();
             view.LoadInitialFromPreferences();
             return view;
         }
-
         private void InitializeWorkbenchBehaviors()
         {
             EnsureWorkbenchStore();
@@ -435,6 +444,9 @@ namespace VSAgent.Views
                 sessionStartedAt = DateTime.Now;
                 SelectWorkbenchTab("Chat");
                 ResponseScrollViewer.ScrollToEnd();
+                // Defensive: ensure the welcome overlay is collapsed so it does not
+                // overlap the restored transcript and block scrolling.
+                if (WelcomeOverlay != null) WelcomeOverlay.Visibility = Visibility.Collapsed;
                 SetTask("Session restored: " + session.Name);
             }
             finally

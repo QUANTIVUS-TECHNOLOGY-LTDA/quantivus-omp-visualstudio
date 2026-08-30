@@ -196,9 +196,111 @@ namespace VSAgent.Services
             return removed;
         }
 
+        public KanbanCard GetKanbanCard(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return null;
+            EnsureLoaded();
+            lock (sync) return Clone(state.KanbanCards.FirstOrDefault(c => c.Id == id));
+        }
+
+        public IReadOnlyList<KanbanCard> SnapshotKanbanCards()
+        {
+            EnsureLoaded();
+            lock (sync)
+            {
+                return state.KanbanCards
+                    .OrderBy(c => c.Status)
+                    .ThenBy(c => c.Order)
+                    .ThenBy(c => c.CreatedAt)
+                    .Select(Clone)
+                    .ToList();
+            }
+        }
+
+        public KanbanCard UpsertKanbanCard(KanbanCard card)
+        {
+            if (card == null) throw new ArgumentNullException(nameof(card));
+            EnsureLoaded();
+            lock (sync)
+            {
+                if (string.IsNullOrWhiteSpace(card.Id)) card.Id = Guid.NewGuid().ToString("N");
+                if (card.CreatedAt == default(DateTime)) card.CreatedAt = DateTime.UtcNow;
+                card.UpdatedAt = DateTime.UtcNow;
+                var index = state.KanbanCards.FindIndex(c => c.Id == card.Id);
+                if (index >= 0) state.KanbanCards[index] = Clone(card);
+                else state.KanbanCards.Add(Clone(card));
+                SaveUnsafe();
+            }
+            RaiseChanged();
+            return Clone(card);
+        }
+
+        public bool DeleteKanbanCard(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return false;
+            EnsureLoaded();
+            bool removed;
+            lock (sync)
+            {
+                removed = state.KanbanCards.RemoveAll(c => c.Id == id) > 0;
+                if (removed) SaveUnsafe();
+            }
+            if (removed) RaiseChanged();
+            return removed;
+        }
+
+        public bool MoveKanbanCard(string id, KanbanStatus newStatus, int? newOrder = null)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return false;
+            EnsureLoaded();
+            bool moved;
+            lock (sync)
+            {
+                var card = state.KanbanCards.FirstOrDefault(c => c.Id == id);
+                if (card == null) return false;
+                card.Status = newStatus;
+                if (newOrder.HasValue) card.Order = newOrder.Value;
+                card.UpdatedAt = DateTime.UtcNow;
+                if (newStatus == KanbanStatus.InProgress) card.StartedAt = DateTime.UtcNow;
+                if (newStatus == KanbanStatus.Done || newStatus == KanbanStatus.Failed) card.FinishedAt = DateTime.UtcNow;
+                SaveUnsafe();
+                moved = true;
+            }
+            if (moved) RaiseChanged();
+            return moved;
+        }
+
+        public void RenumberKanbanColumn(KanbanStatus status)
+        {
+            EnsureLoaded();
+            lock (sync)
+            {
+                var list = state.KanbanCards.Where(c => c.Status == status).OrderBy(c => c.Order).ThenBy(c => c.CreatedAt).ToList();
+                for (int i = 0; i < list.Count; i++) list[i].Order = i;
+                SaveUnsafe();
+            }
+            RaiseChanged();
+        }
+
+        public void RecordKanbanRun(string id, string excerpt, string error)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return;
+            EnsureLoaded();
+            lock (sync)
+            {
+                var card = state.KanbanCards.FirstOrDefault(c => c.Id == id);
+                if (card == null) return;
+                card.RunCount++;
+                card.LastResponseExcerpt = excerpt;
+                card.LastError = error;
+                card.UpdatedAt = DateTime.UtcNow;
+                SaveUnsafe();
+            }
+            RaiseChanged();
+        }
+
         public void UpdatePreferences(Action<WorkbenchPreferences> update)
         {
-            if (update == null) return;
             EnsureLoaded();
             lock (sync)
             {
@@ -396,6 +498,9 @@ namespace VSAgent.Services
 
         [JsonProperty("last_session_id")]
         public string LastSessionId { get; set; }
+
+        [JsonProperty("kanban_cards")]
+        public List<KanbanCard> KanbanCards { get; set; } = new List<KanbanCard>();
     }
 
     public sealed class ChatSession

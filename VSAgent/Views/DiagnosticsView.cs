@@ -79,11 +79,12 @@ namespace VSAgent.Views
             Append(builder, ".NET runtime", Environment.Version.ToString());
             Append(builder, "Operating system", Environment.OSVersion.ToString());
             Append(builder, "Process", Process.GetCurrentProcess().ProcessName + " (PID " + Process.GetCurrentProcess().Id + ")");
-            builder.AppendLine();
             Append(builder, "OMP state", host?.IsReady == true ? "connected" : "disconnected");
             Append(builder, "OMP executable", ompPath ?? "not found");
+            Append(builder, "OMP version", host?.AgentVersion ?? "unknown");
+            Append(builder, "OMP implementation", host?.AgentImplementation ?? "unknown");
+            Append(builder, "ACP session", host?.AgentSessionId ?? "none");
             Append(builder, "MCP host", mcpPath ?? "not found");
-            Append(builder, "Named pipe", host?.PipeName ?? "not initialized");
             Append(builder, "Input characters", (host?.TotalInputChars ?? 0).ToString("N0"));
             Append(builder, "Provider", VSAgentPackage.Env?.ActiveProvider ?? "default");
             Append(builder, "Model", VSAgentPackage.Env?.ActiveModel ?? "default");
