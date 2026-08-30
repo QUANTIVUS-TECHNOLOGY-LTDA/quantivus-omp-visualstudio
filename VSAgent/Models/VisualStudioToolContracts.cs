@@ -36,11 +36,25 @@ namespace VSAgent.Models
             new VisualStudioToolResponse { Id = id, Success = false, Error = error };
     }
 
+    /// <summary>
+    /// Detailed snapshot of the Visual Studio debugger. Used by vs_get_status
+    /// so the agent can reason about whether the debuggee is running, paused
+    /// or detached without triggering another tool call.
+    /// </summary>
     internal sealed class DebuggerSnapshot
     {
         public string Mode { get; set; } = "unknown";
         public string Solution { get; set; } = string.Empty;
         public string StartupProjects { get; set; } = string.Empty;
         public bool IsSolutionOpen { get; set; }
+        public string LastBreakReason { get; set; } = string.Empty;
+        public bool AllExceptionsBreakWhenThrown { get; set; }
+        public bool JustMyCode { get; set; }
+        public string CurrentProcessName { get; set; } = string.Empty;
+        public int CurrentProcessId { get; set; }
+        public string CurrentThreadId { get; set; } = string.Empty;
+        public string CurrentFrame { get; set; } = string.Empty;
+        public int DebuggedProcessCount { get; set; }
+        public int BreakpointCount { get; set; }
     }
 }

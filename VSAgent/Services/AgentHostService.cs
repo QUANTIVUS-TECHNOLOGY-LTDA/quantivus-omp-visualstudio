@@ -34,7 +34,16 @@ namespace VSAgent.Services
         public event EventHandler<string> TextReceived;
 
         public string PipeName { get; private set; }
-        public bool IsReady => ompClient?.IsRunning == true;
+        public string AgentVersion => TryGetOmpClient(out var client) ? client.Version : null;
+        public string AgentImplementation => TryGetOmpClient(out var client) ? client.Implementation : null;
+        public string AgentSessionId => TryGetOmpClient(out var client) ? client.CurrentSessionId : null;
+        public DateTime? AgentStartedAt => TryGetOmpClient(out var client) ? (DateTime?)client.StartedAt : null;
+        public bool IsReady => TryGetOmpClient(out var client) && client.IsRunning;
+        private bool TryGetOmpClient(out OmpAcpClient client)
+        {
+            client = ompClient;
+            return client != null;
+        }
         public ActiveSkillRegistry ActiveSkills => activeSkills;
         public SkillStore SkillStore => skillStore;
         public long TotalInputChars => Interlocked.Read(ref totalInputChars);

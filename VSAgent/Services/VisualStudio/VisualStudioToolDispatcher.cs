@@ -3,12 +3,26 @@ using EnvDTE80;
 using Microsoft.VisualStudio.Shell;
 using Newtonsoft.Json.Linq;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using VSAgent.Models;
+// EnvDTE and EnvDTE80 PIAs only expose a small subset of the COM automation
+// surface at compile time; the remaining members live in the COM type library
+// and are reachable through runtime binding. To keep the dispatcher portable
+// across VS 17/18 without dragging in extra references, ambiguous BCL types are
+// aliased explicitly so the EnvDTE and WPF/BCL names cannot collide.
+using Thread = EnvDTE.Thread;
+using StackFrame = EnvDTE.StackFrame;
+using Expression = EnvDTE.Expression;
+using Expressions = EnvDTE.Expressions;
+using Breakpoint = EnvDTE.Breakpoint;
+using DteWindow = EnvDTE.Window;
+using DiagnosticsProcess = System.Diagnostics.Process;
 
 namespace VSAgent.Services.VisualStudio
 {
@@ -20,6 +34,8 @@ namespace VSAgent.Services.VisualStudio
     /// vs_execute_command. The focused tools return structured data while the
     /// command bridge makes the complete Visual Studio command surface
     /// available to OMP, subject to the ACP permission flow.
+    ///
+    /// Runtime-only diagnostics and assembly inspection stay off the UI thread.
     /// </summary>
     internal sealed class VisualStudioToolDispatcher
     {
@@ -44,9 +60,37 @@ namespace VSAgent.Services.VisualStudio
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                await package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
+                switch (request.Tool)
+                {
+                    // Pure runtime/environment diagnostics never touch DTE and
+                    // run on the thread pool to keep the UI responsive.
+                    case "vs_get_environment_variables":
+                    case "vs_get_system_info":
+                    case "vs_get_host_runtime":
+                    case "vs_analyze_assembly":
+                    case "vs_dependency_graph":
+                        return VisualStudioToolResponse.Ok(request.Id, ExecuteRuntime(request));
 
+                    default:
+                        await package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+                        cancellationToken.ThrowIfCancellationRequested();
+                        return ExecuteOnUIThread(request);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                return VisualStudioToolResponse.Fail(request.Id, "The Visual Studio operation was cancelled.");
+            }
+            catch (Exception ex)
+            {
+                return VisualStudioToolResponse.Fail(request.Id, ex.Message);
+            }
+        }
+
+        private VisualStudioToolResponse ExecuteOnUIThread(VisualStudioToolRequest request)
+        {
+            try
+            {
                 switch (request.Tool)
                 {
                     // IDE and command surface
@@ -58,6 +102,7 @@ namespace VSAgent.Services.VisualStudio
 
                     // Solution and project control
                     case "vs_get_solution": return Ok(request, GetSolution());
+                    case "vs_get_solution_properties": return Ok(request, GetSolutionProperties());
                     case "vs_solution_open": return Ok(request, OpenSolution(request.Arguments));
                     case "vs_solution_close": return Ok(request, CloseSolution(request.Arguments));
                     case "vs_solution_configuration_list": return Ok(request, ListSolutionConfigurations());
@@ -97,17 +142,33 @@ namespace VSAgent.Services.VisualStudio
                     case "vs_debug_set_next_statement": return Ok(request, SetNextStatement());
                     case "vs_debug_detach_all": return Ok(request, DetachAll());
                     case "vs_debug_terminate_all": return Ok(request, TerminateAll());
-                    case "vs_debug_process_list": return Ok(request, ListDebuggedProcesses());
+                    case "vs_debug_process_list": return Ok(request, ListProcesses());
                     case "vs_debug_thread_list": return Ok(request, ListThreads());
-                    case "vs_get_call_stack": return Ok(request, GetCallStack());
+                    case "vs_get_call_stack": return Ok(request, GetCallStack(includeAllThreads: false));
+                    case "vs_get_call_stack_all_threads": return Ok(request, GetCallStack(includeAllThreads: true));
                     case "vs_get_locals": return Ok(request, GetLocals());
+                    case "vs_get_arguments": return Ok(request, GetExpressions(GetCurrentExpressions("Arguments")));
                     case "vs_evaluate": return Ok(request, Evaluate(request.Arguments));
+
+                    // Debugger inspection
+                    case "vs_list_threads": return Ok(request, ListThreads());
+                    case "vs_list_processes": return Ok(request, ListProcesses());
+                    case "vs_get_current_thread": return Ok(request, GetCurrentThread());
+                    case "vs_list_modules": return Ok(request, ListModules());
+                    case "vs_get_exception_info": return Ok(request, GetExceptionInfo());
+                    case "vs_get_exception_settings": return Ok(request, GetExceptionSettings());
+                    case "vs_get_process_info": return Ok(request, GetProcessInfo(request.Arguments));
 
                     // Breakpoints
                     case "vs_breakpoint_add": return Ok(request, AddBreakpoint(request.Arguments));
                     case "vs_breakpoint_list": return Ok(request, ListBreakpoints());
                     case "vs_breakpoint_remove": return Ok(request, RemoveBreakpoints(request.Arguments));
+                    case "vs_breakpoint_remove_at": return Ok(request, RemoveBreakpointAt(request.Arguments));
                     case "vs_breakpoint_set_enabled": return Ok(request, SetBreakpointsEnabled(request.Arguments));
+                    case "vs_breakpoint_enable": return Ok(request, SetBreakpointEnabled(request.Arguments, enabled: true));
+                    case "vs_breakpoint_disable": return Ok(request, SetBreakpointEnabled(request.Arguments, enabled: false));
+                    case "vs_breakpoint_set_condition": return Ok(request, SetBreakpointCondition(request.Arguments));
+                    case "vs_breakpoint_clear_all": return Ok(request, ClearAllBreakpoints());
 
                     default:
                         return VisualStudioToolResponse.Fail(
@@ -128,6 +189,21 @@ namespace VSAgent.Services.VisualStudio
         private static VisualStudioToolResponse Ok(VisualStudioToolRequest request, object result) =>
             VisualStudioToolResponse.Ok(request.Id, result);
 
+        private object ExecuteRuntime(VisualStudioToolRequest request)
+        {
+            switch (request.Tool)
+            {
+                case "vs_get_environment_variables": return GetEnvironmentVariables(request.Arguments);
+                case "vs_get_system_info": return GetSystemInfo();
+                case "vs_get_host_runtime": return GetHostRuntime();
+                case "vs_analyze_assembly": return AnalyzeAssembly(request.Arguments);
+                case "vs_dependency_graph": return GetDependencyGraph(request.Arguments);
+                default: throw new InvalidOperationException("Unhandled runtime tool: " + request.Tool);
+            }
+        }
+
+        // ===== Solution / build / startup ===========================================
+
         private DebuggerSnapshot GetStatus()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
@@ -139,17 +215,39 @@ namespace VSAgent.Services.VisualStudio
                     : "stopped";
 
             var startupProjects = dte.Solution?.SolutionBuild?.StartupProjects as Array;
-            var snapshot = new DebuggerSnapshot
+            var currentProcess = dte.Debugger.CurrentProcess;
+            var currentThread = dte.Debugger.CurrentThread;
+            StackFrame currentFrame = null;
+            if (currentThread != null)
+            {
+                try
+                {
+                    var frames = currentThread.StackFrames;
+                    if (frames != null && frames.Count > 0) currentFrame = frames.Item(1);
+                }
+                catch { /* frames may not be enumerable when detached */ }
+            }
+
+            return new DebuggerSnapshot
             {
                 Mode = mode,
                 Solution = dte.Solution?.FullName ?? string.Empty,
                 StartupProjects = startupProjects == null
                     ? string.Empty
                     : string.Join(", ", startupProjects.Cast<object>().Select(value => value?.ToString())),
-                IsSolutionOpen = dte.Solution?.IsOpen == true
+                IsSolutionOpen = dte.Solution?.IsOpen == true,
+                LastBreakReason = SafeEnumString(dte.Debugger, "LastBreakReason"),
+                AllExceptionsBreakWhenThrown = SafeBool(dte.Debugger, "AllExceptionsBreakWhenThrown"),
+                JustMyCode = SafeBool(dte.Debugger, "JustMyCode"),
+                CurrentProcessName = SafeString(currentProcess, "Name"),
+                CurrentProcessId = SafeInt(currentProcess, "ProcessID"),
+                CurrentThreadId = SafeString(currentThread, "ID"),
+                CurrentFrame = currentFrame == null
+                    ? string.Empty
+                    : (SafeString(currentFrame, "FunctionName") + " @ " + SafeString(currentFrame, "Module")),
+                DebuggedProcessCount = SafeInt(dte.Debugger.DebuggedProcesses, "Count"),
+                BreakpointCount = SafeInt(dte.Debugger.Breakpoints, "Count")
             };
-
-            return snapshot;
         }
 
         private object ExecuteCommand(JObject arguments)
@@ -197,7 +295,7 @@ namespace VSAgent.Services.VisualStudio
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var windows = new List<object>();
-            foreach (Window window in dte.Windows)
+            foreach (DteWindow window in dte.Windows)
             {
                 windows.Add(new
                 {
@@ -219,7 +317,7 @@ namespace VSAgent.Services.VisualStudio
             if (string.IsNullOrWhiteSpace(caption) && string.IsNullOrWhiteSpace(kind))
                 throw new ArgumentException("caption or kind is required.");
 
-            foreach (Window window in dte.Windows)
+            foreach (DteWindow window in dte.Windows)
             {
                 var captionMatches = string.IsNullOrWhiteSpace(caption) ||
                     string.Equals(SafeWindowCaption(window), caption, StringComparison.OrdinalIgnoreCase);
@@ -290,13 +388,14 @@ namespace VSAgent.Services.VisualStudio
             var configurations = new List<object>();
             foreach (SolutionConfiguration configuration in dte.Solution.SolutionBuild.SolutionConfigurations)
             {
+                var configurationPlatform = SafeString(configuration, "PlatformName");
                 configurations.Add(new
                 {
                     name = configuration.Name,
-                    platform = configuration.PlatformName,
+                    platform = configurationPlatform,
                     isActive = active != null &&
                                string.Equals(active.Name, configuration.Name, StringComparison.OrdinalIgnoreCase) &&
-                               string.Equals(active.PlatformName, configuration.PlatformName, StringComparison.OrdinalIgnoreCase)
+                               string.Equals(SafeString(active, "PlatformName"), configurationPlatform, StringComparison.OrdinalIgnoreCase)
                 });
             }
 
@@ -313,14 +412,15 @@ namespace VSAgent.Services.VisualStudio
             foreach (SolutionConfiguration configuration in dte.Solution.SolutionBuild.SolutionConfigurations)
             {
                 if (!string.Equals(configuration.Name, name, StringComparison.OrdinalIgnoreCase)) continue;
+                var configurationPlatform = SafeString(configuration, "PlatformName");
                 if (!string.IsNullOrWhiteSpace(platform) &&
-                    !string.Equals(configuration.PlatformName, platform, StringComparison.OrdinalIgnoreCase))
+                    !string.Equals(configurationPlatform, platform, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
 
                 configuration.Activate();
-                return new { activated = true, name = configuration.Name, platform = configuration.PlatformName };
+                return new { activated = true, name = configuration.Name, platform = configurationPlatform };
             }
 
             throw new InvalidOperationException("The requested solution configuration was not found.");
@@ -393,7 +493,7 @@ namespace VSAgent.Services.VisualStudio
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             EnsureSolutionOpen();
-            dte.Solution.SolutionBuild.Cancel();
+            dte.ExecuteCommand("Build.Cancel");
             return new { cancelled = true };
         }
 
@@ -713,42 +813,43 @@ namespace VSAgent.Services.VisualStudio
             return new { terminated = true };
         }
 
-        private object ListDebuggedProcesses()
+        private object GetSolutionProperties()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            var processes = new List<object>();
-            foreach (EnvDTE.Process process in dte.Debugger.DebuggedProcesses)
+            var build = dte.Solution?.SolutionBuild;
+            var startupProjects = build?.StartupProjects as Array;
+            var configurations = new List<string>();
+            try
             {
-                processes.Add(new
+                var cfgs = SafeObject(build, "SolutionConfigurations");
+                if (cfgs is IEnumerable enumerable)
                 {
-                    id = process.ProcessID,
-                    name = process.Name
-                });
+                    foreach (var item in enumerable)
+                    {
+                        if (item == null) continue;
+                        var name = SafeString(item, "Name");
+                        if (!string.IsNullOrEmpty(name) && !configurations.Contains(name))
+                            configurations.Add(name);
+                    }
+                }
             }
+            catch { /* best-effort */ }
 
-            return processes;
+            return new
+            {
+                solutionFullName = dte.Solution?.FullName ?? string.Empty,
+                startupProjects = startupProjects == null
+                    ? string.Empty
+                    : string.Join(", ", startupProjects.Cast<object>().Select(value => value?.ToString())),
+                activeConfigurationName = SafeString(build?.ActiveConfiguration, "Name"),
+                activePlatformName = SafeString(build?.ActiveConfiguration, "PlatformName"),
+                buildState = SafeEnumString(build, "BuildState"),
+                lastBuildInfo = SafeInt(build, "LastBuildInfo"),
+                configurations
+            };
         }
 
-        private object ListThreads()
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            var threads = new List<object>();
-            var program = dte.Debugger.CurrentProgram;
-            if (program == null) return threads;
-
-            foreach (EnvDTE.Thread thread in program.Threads)
-            {
-                threads.Add(new
-                {
-                    id = thread.ID,
-                    name = thread.Name,
-                    state = thread.State.ToString(),
-                    location = thread.Location
-                });
-            }
-
-            return threads;
-        }
+        // ===== Breakpoints ===========================================================
 
         private object AddBreakpoint(JObject arguments)
         {
@@ -786,23 +887,103 @@ namespace VSAgent.Services.VisualStudio
             };
         }
 
+        private object RemoveBreakpoint(JObject arguments)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var index = arguments?["index"]?.Value<int>() ?? -1;
+            if (index <= 0) throw new ArgumentException("A 1-based 'index' is required.");
+            var target = GetBreakpointAt(index);
+            var location = new { file = target.File, line = target.FileLine };
+            target.Delete();
+            return new { removed = true, index, location };
+        }
+
+        private object RemoveBreakpointAt(JObject arguments)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var file = arguments?["file"]?.Value<string>();
+            var line = arguments?["line"]?.Value<int>() ?? 0;
+            if (string.IsNullOrWhiteSpace(file) || line <= 0)
+                throw new ArgumentException("file and a positive line number are required.");
+
+            var removed = new List<object>();
+            var snapshot = dte.Debugger.Breakpoints.Cast<Breakpoint>().ToList();
+            foreach (var bp in snapshot)
+            {
+                if (bp == null) continue;
+                if (string.Equals(bp.File, file, StringComparison.OrdinalIgnoreCase) && bp.FileLine == line)
+                {
+                    removed.Add(new { file = bp.File, line = bp.FileLine });
+                    bp.Delete();
+                }
+            }
+            return new { removed = removed.Count, locations = removed };
+        }
+
+        private object SetBreakpointEnabled(JObject arguments, bool enabled)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var index = arguments?["index"]?.Value<int>() ?? -1;
+            if (index <= 0) throw new ArgumentException("A 1-based 'index' is required.");
+            var bp = GetBreakpointAt(index);
+            bp.Enabled = enabled;
+            return new { enabled, file = bp.File, line = bp.FileLine, index };
+        }
+
+        private object SetBreakpointCondition(JObject arguments)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var index = arguments?["index"]?.Value<int>() ?? -1;
+            var condition = arguments?["condition"]?.Value<string>();
+            if (index <= 0) throw new ArgumentException("A 1-based 'index' is required.");
+            if (string.IsNullOrWhiteSpace(condition))
+                throw new ArgumentException("A non-empty 'condition' is required.");
+            var existing = GetBreakpointAt(index);
+            var file = existing.File;
+            var line = existing.FileLine;
+            existing.Delete();
+            var reAdded = dte.Debugger.Breakpoints.Add(File: file, Line: line, Condition: condition);
+            return new
+            {
+                replaced = true,
+                file,
+                line,
+                condition,
+                count = reAdded.Count
+            };
+        }
+
+        private object ClearAllBreakpoints()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var snapshot = dte.Debugger.Breakpoints.Cast<Breakpoint>().ToList();
+            var count = snapshot.Count;
+            foreach (var bp in snapshot) bp?.Delete();
+            return new { cleared = count };
+        }
+
         private object ListBreakpoints()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var result = new List<object>();
+            var index = 0;
             foreach (Breakpoint breakpoint in dte.Debugger.Breakpoints)
             {
+                if (breakpoint == null) continue;
+                index++;
                 result.Add(new
                 {
-                    breakpoint.File,
-                    breakpoint.FileLine,
-                    breakpoint.FileColumn,
-                    breakpoint.FunctionName,
-                    breakpoint.Enabled,
-                    breakpoint.Condition,
+                    index,
+                    file = breakpoint.File,
+                    line = breakpoint.FileLine,
+                    column = breakpoint.FileColumn,
+                    functionName = breakpoint.FunctionName,
+                    enabled = breakpoint.Enabled,
+                    condition = breakpoint.Condition,
                     conditionType = breakpoint.ConditionType.ToString(),
                     hitCountType = breakpoint.HitCountType.ToString(),
-                    breakpoint.HitCountTarget
+                    hitCountTarget = breakpoint.HitCountTarget,
+                    currentHits = SafeInt(breakpoint, "CurrentHits")
                 });
             }
 
@@ -812,6 +993,9 @@ namespace VSAgent.Services.VisualStudio
         private object RemoveBreakpoints(JObject arguments)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+            var requestedIndex = OptionalInt(arguments, "index", 0);
+            if (requestedIndex > 0) return RemoveBreakpoint(arguments);
+
             var removeAll = OptionalBool(arguments, "all", false);
             var file = OptionalString(arguments, "file");
             var line = OptionalInt(arguments, "line", 0);
@@ -836,6 +1020,9 @@ namespace VSAgent.Services.VisualStudio
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var enabled = OptionalBool(arguments, "enabled", true);
+            var requestedIndex = OptionalInt(arguments, "index", 0);
+            if (requestedIndex > 0) return SetBreakpointEnabled(arguments, enabled);
+
             var all = OptionalBool(arguments, "all", false);
             var file = OptionalString(arguments, "file");
             var line = OptionalInt(arguments, "line", 0);
@@ -854,13 +1041,47 @@ namespace VSAgent.Services.VisualStudio
             return new { updated, enabled, all, file = file ?? string.Empty, line };
         }
 
-        private object GetCallStack()
+        private Breakpoint GetBreakpointAt(int index)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            var frames = new List<object>();
-            var thread = dte.Debugger.CurrentThread;
-            if (thread == null) return frames;
+            var current = 0;
+            foreach (Breakpoint bp in dte.Debugger.Breakpoints)
+            {
+                if (bp == null) continue;
+                current++;
+                if (current == index) return bp;
+            }
+            throw new ArgumentOutOfRangeException(nameof(index), "Breakpoint index out of range.");
+        }
 
+        // ===== Call stack / locals / arguments =======================================
+
+        private object GetCallStack(bool includeAllThreads)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (!includeAllThreads)
+            {
+                var currentThread = dte.Debugger.CurrentThread;
+                return currentThread == null ? new List<object>() : SnapshotCallStack(currentThread);
+            }
+
+            var result = new List<object>();
+            foreach (var thread in EnumerateAllThreads())
+            {
+                result.Add(new
+                {
+                    threadId = thread.ID,
+                    threadName = thread.Name,
+                    frames = SnapshotCallStack(thread)
+                });
+            }
+
+            return result;
+        }
+
+        private static List<object> SnapshotCallStack(Thread thread)
+        {
+            var frames = new List<object>();
             var index = 0;
             foreach (StackFrame frame in thread.StackFrames)
             {
@@ -871,8 +1092,9 @@ namespace VSAgent.Services.VisualStudio
                     module = frame.Module,
                     language = frame.Language,
                     returnType = frame.ReturnType,
-                    threadId = frame.Parent?.ID,
-                    threadLocation = frame.Parent?.Location
+                    fileName = SafeFileName(frame),
+                    threadId = thread.ID,
+                    threadLocation = thread.Location
                 });
             }
 
@@ -892,6 +1114,45 @@ namespace VSAgent.Services.VisualStudio
                 arguments = SnapshotExpressions(frame.Arguments),
                 locals = SnapshotExpressions(frame.Locals)
             };
+        }
+
+        private Expressions GetCurrentExpressions(string property)
+        {
+            var thread = dte.Debugger.CurrentThread;
+            if (thread == null) return null;
+            StackFrame frame;
+            try
+            {
+                var frames = thread.StackFrames;
+                if (frames == null || frames.Count == 0) return null;
+                frame = frames.Item(1);
+            }
+            catch
+            {
+                return null;
+            }
+            if (frame == null) return null;
+            return SafeObject(frame, property) as Expressions;
+        }
+
+        private object GetExpressions(Expressions expressions)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (expressions == null) return new { error = "Debugger is not paused at a stack frame." };
+            var result = new List<object>();
+            foreach (Expression expression in expressions)
+            {
+                if (expression == null) continue;
+                result.Add(new
+                {
+                    name = expression.Name,
+                    value = expression.Value,
+                    type = expression.Type,
+                    isValid = expression.IsValidValue,
+                    dataMembers = expression.DataMembers?.Count ?? 0
+                });
+            }
+            return result;
         }
 
         private object Evaluate(JObject arguments)
@@ -1094,8 +1355,9 @@ namespace VSAgent.Services.VisualStudio
             foreach (SolutionConfiguration configuration in dte.Solution.SolutionBuild.SolutionConfigurations)
             {
                 if (!string.Equals(configuration.Name, configurationName, StringComparison.OrdinalIgnoreCase)) continue;
+                var configurationPlatform = SafeString(configuration, "PlatformName");
                 if (!string.IsNullOrWhiteSpace(platform) &&
-                    !string.Equals(configuration.PlatformName, platform, StringComparison.OrdinalIgnoreCase))
+                    !string.Equals(configurationPlatform, platform, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -1204,6 +1466,290 @@ namespace VSAgent.Services.VisualStudio
             }
         }
 
+        // ===== Threads / processes ===================================================
+
+        private object ListThreads()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var threads = new List<object>();
+            var currentThread = dte.Debugger.CurrentThread;
+            var process = dte.Debugger.CurrentProcess;
+            if (process == null) return threads;
+            var threadCollection = SafeObject(process, "Threads") as IEnumerable;
+            if (threadCollection == null) return threads;
+            foreach (var thread in threadCollection)
+            {
+                if (thread == null) continue;
+                var id = SafeString(thread, "ID");
+                threads.Add(new
+                {
+                    id,
+                    name = SafeString(thread, "Name"),
+                    priority = SafeInt(thread, "Priority"),
+                    location = SafeString(thread, "Location"),
+                    isCurrent = currentThread != null && id == SafeString(currentThread, "ID"),
+                    stackDepth = SafeCount(SafeObject(thread, "StackFrames"))
+                });
+            }
+            return threads;
+        }
+
+        private object ListProcesses()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var processes = new List<object>();
+            var currentProcess = dte.Debugger.CurrentProcess;
+            foreach (var process in dte.Debugger.DebuggedProcesses)
+            {
+                if (process == null) continue;
+                var pid = SafeInt(process, "ProcessID");
+                processes.Add(new
+                {
+                    name = SafeString(process, "Name"),
+                    processId = pid,
+                    userName = SafeString(process, "UserName"),
+                    isCurrent = currentProcess != null && pid == SafeInt(currentProcess, "ProcessID"),
+                    threadCount = SafeCount(SafeObject(process, "Threads")),
+                    moduleCount = SafeCount(SafeObject(process, "Modules"))
+                });
+            }
+            return processes;
+        }
+
+        private object GetCurrentThread()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var thread = dte.Debugger.CurrentThread;
+            if (thread == null) return new { error = "No current thread." };
+            var frames = new List<object>();
+            foreach (StackFrame frame in thread.StackFrames)
+            {
+                frames.Add(new
+                {
+                    functionName = frame.FunctionName,
+                    module = frame.Module,
+                    language = frame.Language,
+                    fileName = SafeFileName(frame)
+                });
+            }
+            return new
+            {
+                id = thread.ID,
+                name = thread.Name,
+                location = thread.Location,
+                frames
+            };
+        }
+
+        private IEnumerable<Thread> EnumerateAllThreads()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var foundAny = false;
+
+            foreach (EnvDTE.Process process in dte.Debugger.DebuggedProcesses)
+            {
+                if (!(SafeObject(process, "Threads") is IEnumerable threads)) continue;
+                foreach (var candidate in threads)
+                {
+                    if (!(candidate is Thread thread)) continue;
+                    var key = SafeString(thread, "ID") + "|" + SafeString(thread, "Name") + "|" + SafeString(thread, "Location");
+                    if (!seen.Add(key)) continue;
+                    foundAny = true;
+                    yield return thread;
+                }
+            }
+
+            if (foundAny) yield break;
+
+            var program = dte.Debugger.CurrentProgram;
+            if (program == null) yield break;
+            foreach (Thread thread in program.Threads)
+            {
+                if (thread != null) yield return thread;
+            }
+        }
+
+        // ===== Modules / exceptions ==================================================
+
+        private object ListModules()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var modules = new List<object>();
+            var process = dte.Debugger.CurrentProcess;
+            if (process == null) return modules;
+            var moduleCollection = SafeObject(process, "Modules") as IEnumerable;
+            if (moduleCollection == null) return modules;
+            foreach (var module in moduleCollection)
+            {
+                if (module == null) continue;
+                modules.Add(new
+                {
+                    name = SafeString(module, "Name"),
+                    path = SafeString(module, "Path"),
+                    version = SafeString(module, "Version"),
+                    optimized = SafeBool(module, "Optimized"),
+                    address = SafeString(module, "Address")
+                });
+            }
+            return modules;
+        }
+
+        private object GetExceptionInfo()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            // Debugger2.CurrentException is exposed at runtime via COM late
+            // binding even when the PIA surface omits it. Fall back to an empty
+            // result when no exception is in flight.
+            try
+            {
+                dynamic debugger2 = dte.Debugger;
+                dynamic exception = debugger2.CurrentException;
+                if (exception == null) return new { current = (string)null };
+                return new
+                {
+                    name = SafeString(exception, "Type"),
+                    description = SafeString(exception, "Description"),
+                    source = SafeString(exception, "Source"),
+                    details = SafeString(exception, "Details")
+                };
+            }
+            catch
+            {
+                return new { current = (string)null, note = "No active exception in the current frame." };
+            }
+        }
+
+        private object GetExceptionSettings()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            // EnvDTE.Debugger exposes a subset of exception configuration
+            // through dynamic-only properties. We surface what we can read.
+            var allThrown = SafeBool(dte.Debugger, "AllExceptionsBreakWhenThrown");
+            var justMyCode = SafeBool(dte.Debugger, "JustMyCode");
+            return new
+            {
+                allExceptionsBreakWhenThrown = allThrown,
+                justMyCode = justMyCode,
+                note = "Per-category exception settings require Visual Studio Pro/Enterprise."
+            };
+        }
+
+        // ===== Static environment / system info ======================================
+
+        private object GetEnvironmentVariables(JObject arguments)
+        {
+            var filter = arguments?["filter"]?.Value<string>();
+            var snapshot = new SortedDictionary<string, string>(StringComparer.Ordinal);
+            var redacted = 0;
+            foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
+            {
+                var name = entry.Key?.ToString() ?? string.Empty;
+                if (string.IsNullOrEmpty(name)) continue;
+                if (!string.IsNullOrWhiteSpace(filter) &&
+                    name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                if (IsSensitiveEnvironmentVariable(name))
+                {
+                    snapshot[name] = "[REDACTED]";
+                    redacted++;
+                }
+                else
+                {
+                    snapshot[name] = entry.Value?.ToString() ?? string.Empty;
+                }
+            }
+            return new
+            {
+                scope = arguments?["scope"]?.Value<string>() ?? "process",
+                count = snapshot.Count,
+                redacted,
+                variables = snapshot
+            };
+        }
+
+        private object GetSystemInfo()
+        {
+            return new
+            {
+                machineName = Environment.MachineName,
+                userName = Environment.UserName,
+                userDomainName = Environment.UserDomainName,
+                osVersion = Environment.OSVersion.ToString(),
+                osPlatform = Environment.OSVersion.Platform.ToString(),
+                processorCount = Environment.ProcessorCount,
+                systemPageSize = Environment.SystemPageSize,
+                workingSet = Environment.WorkingSet,
+                is64BitOperatingSystem = Environment.Is64BitOperatingSystem,
+                is64BitProcess = Environment.Is64BitProcess,
+                clrVersion = Environment.Version.ToString(),
+                commandLine = SafeCommandLine(),
+                currentDirectory = Environment.CurrentDirectory
+            };
+        }
+
+        // ===== Runtime analysis (process diagnostics) ================================
+
+        private object GetProcessInfo(JObject arguments)
+        {
+            int pid = arguments?["pid"]?.Value<int>() ?? SafeInt(dte.Debugger.CurrentProcess, "ProcessID");
+            if (pid <= 0) throw new ArgumentException("A positive 'pid' is required, or debug a process first.");
+
+            using var probe = DiagnosticsProcess.GetProcessById(pid);
+            return new
+            {
+                pid,
+                name = probe.ProcessName,
+                title = probe.MainWindowTitle,
+                workingSet64 = probe.WorkingSet64,
+                privateMemorySize64 = probe.PrivateMemorySize64,
+                virtualMemorySize64 = probe.VirtualMemorySize64,
+                pagedSystemMemorySize64 = probe.PagedSystemMemorySize64,
+                pagedMemorySize64 = probe.PagedMemorySize64,
+                nonpagedSystemMemorySize64 = probe.NonpagedSystemMemorySize64,
+                handleCount = probe.HandleCount,
+                basePriority = probe.BasePriority,
+                threads = probe.Threads.Count,
+                modules = SafeModuleCount(probe),
+                startTime = SafeStartTime(probe),
+                cpuTime = SafeTotalProcessorTime(probe),
+                hasExited = probe.HasExited,
+                responding = SafeResponding(probe)
+            };
+        }
+
+        private object GetHostRuntime()
+        {
+            using var snapshot = DiagnosticsProcess.GetCurrentProcess();
+            var runtime = new
+            {
+                clrVersion = Environment.Version.ToString(),
+                serverGc = System.Runtime.GCSettings.IsServerGC,
+                latencyMode = System.Runtime.GCSettings.LatencyMode.ToString(),
+                totalMemory = GC.GetTotalMemory(false),
+                gen0Collections = GC.CollectionCount(0),
+                gen1Collections = GC.CollectionCount(1),
+                gen2Collections = GC.CollectionCount(2),
+                workingSet64 = snapshot.WorkingSet64,
+                privateMemorySize64 = snapshot.PrivateMemorySize64,
+                virtualMemorySize64 = snapshot.VirtualMemorySize64,
+                handleCount = snapshot.HandleCount,
+                threadCount = snapshot.Threads.Count,
+                basePriority = snapshot.BasePriority,
+                startTime = SafeStartTime(snapshot),
+                cpuTime = SafeTotalProcessorTime(snapshot),
+                uptimeSeconds = (DateTime.UtcNow - SafeStartTime(snapshot)).TotalSeconds
+            };
+            return new
+            {
+                pid = snapshot.Id,
+                name = snapshot.ProcessName,
+                title = snapshot.MainWindowTitle,
+                runtime
+            };
+        }
+
+        // ===== Safe accessors =========================================================
+
         private static string SafeProjectFullName(Project project)
         {
             try { return project.FullName; }
@@ -1228,28 +1774,171 @@ namespace VSAgent.Services.VisualStudio
             catch { return string.Empty; }
         }
 
-        private static string SafeWindowCaption(Window window)
+        private static string SafeWindowCaption(DteWindow window)
         {
             try { return window.Caption; }
             catch { return string.Empty; }
         }
 
-        private static string SafeWindowKind(Window window)
+        private static string SafeWindowKind(DteWindow window)
         {
             try { return window.Kind; }
             catch { return string.Empty; }
         }
 
-        private static bool SafeWindowVisible(Window window)
+        private static bool SafeWindowVisible(DteWindow window)
         {
             try { return window.Visible; }
             catch { return false; }
         }
 
-        private static string SafeWindowDocument(Window window)
+        private static string SafeWindowDocument(DteWindow window)
         {
             try { return window.Document?.FullName ?? string.Empty; }
             catch { return string.Empty; }
+        }
+
+        private static string SafeFileName(StackFrame frame)
+        {
+            try { return SafeString(frame, "FileName"); }
+            catch { return string.Empty; }
+        }
+
+        private static string SafeCommandLine()
+        {
+            try { return Environment.CommandLine ?? string.Empty; }
+            catch { return string.Empty; }
+        }
+
+        private static bool IsSensitiveEnvironmentVariable(string name)
+        {
+            var normalized = (name ?? string.Empty).ToUpperInvariant();
+            return normalized == "PWD" ||
+                   normalized.Contains("PASSWORD") ||
+                   normalized.Contains("PASSWD") ||
+                   normalized.Contains("TOKEN") ||
+                   normalized.Contains("SECRET") ||
+                   normalized.Contains("API_KEY") ||
+                   normalized.Contains("APIKEY") ||
+                   normalized.Contains("PRIVATE_KEY") ||
+                   normalized.Contains("CONNECTION_STRING") ||
+                   normalized.Contains("CREDENTIAL") ||
+                   normalized.Contains("COOKIE");
+        }
+
+        private static object SafeObject(object target, string property)
+        {
+            if (target == null) return null;
+            try
+            {
+                var prop = target.GetType().GetProperty(property);
+                if (prop != null) return prop.GetValue(target);
+
+                return target.GetType().InvokeMember(
+                    property,
+                    BindingFlags.GetProperty,
+                    binder: null,
+                    target: target,
+                    args: null);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string SafeString(object target, string property)
+        {
+            var value = SafeObject(target, property);
+            if (value == null) return string.Empty;
+            try { return value.ToString() ?? string.Empty; }
+            catch { return string.Empty; }
+        }
+
+        private static bool SafeBool(object target, string property)
+        {
+            var value = SafeObject(target, property);
+            if (value is bool b) return b;
+            if (value == null) return false;
+            try { return Convert.ToBoolean(value); }
+            catch { return false; }
+        }
+
+        private static int SafeInt(object target, string property)
+        {
+            var value = SafeObject(target, property);
+            if (value == null) return 0;
+            try { return Convert.ToInt32(value); }
+            catch { return 0; }
+        }
+
+        private static int SafeCount(object value)
+        {
+            if (value is ICollection collection) return collection.Count;
+            return SafeInt(value, "Count");
+        }
+
+        private static string SafeEnumString(object target, string property)
+        {
+            var value = SafeObject(target, property);
+            return value?.ToString() ?? string.Empty;
+        }
+
+        private static int SafeModuleCount(DiagnosticsProcess process)
+        {
+            try { return process.Modules.Count; }
+            catch { return 0; }
+        }
+
+        private static DateTime SafeStartTime(DiagnosticsProcess process)
+        {
+            try { return process.StartTime; }
+            catch { return DateTime.UtcNow; }
+        }
+
+        private static TimeSpan SafeTotalProcessorTime(DiagnosticsProcess process)
+        {
+            try { return process.TotalProcessorTime; }
+            catch { return TimeSpan.Zero; }
+        }
+
+        private static bool SafeResponding(DiagnosticsProcess process)
+        {
+            try { return process.Responding; }
+            catch { return false; }
+        }
+
+        // ===== Assembly analysis (DLLSpy) =========================================
+
+        private static readonly VSAgent.Services.Analysis.AssemblyAnalysisService AssemblyAnalyzer =
+            new VSAgent.Services.Analysis.AssemblyAnalysisService();
+
+        private static object AnalyzeAssembly(JObject arguments)
+        {
+            var path = arguments?["filePath"]?.Value<string>();
+            if (string.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("filePath is required.");
+            if (!System.IO.File.Exists(path))
+                throw new System.IO.FileNotFoundException("Assembly not found.", path);
+            var analysis = AssemblyAnalyzer.Analyze(path);
+            return analysis;
+        }
+
+        private static object GetDependencyGraph(JObject arguments)
+        {
+            var path = arguments?["filePath"]?.Value<string>();
+            if (string.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("filePath is required.");
+            if (!System.IO.File.Exists(path))
+                throw new System.IO.FileNotFoundException("Assembly not found.", path);
+            var analysis = AssemblyAnalyzer.Analyze(path);
+            return new
+            {
+                file = analysis.FileName,
+                root = analysis.Graph.Root,
+                nodes = analysis.Graph.Nodes,
+                edges = analysis.Graph.Edges
+            };
         }
     }
 }

@@ -16,6 +16,8 @@ namespace VSAgent
     [ProvideOptionPage(typeof(OptionsProvider.GeneralOptions), "VS Agent", "General", 0, 0, true, SupportsProfiles = true)]
     public sealed class VSAgentPackage : AsyncPackage
     {
+        internal static Services.I18n.LocalizationService Localization { get; } =
+            Services.I18n.LocalizationService.Current;
         public const string PackageGuidString = "41f0c0d8-5c2b-4f02-8c7e-0b3d3b6e1a2f";
         internal static Microsoft.VisualStudio.OLE.Interop.IServiceProvider PackageServiceProvider { get; private set; }
         public static System.IServiceProvider GetServiceProvider()
@@ -45,8 +47,8 @@ namespace VSAgent
             CancellationToken cancellationToken,
             IProgress<ServiceProgressData> progress)
         {
+            ApplyLanguageFromPreferences();
             Instance = this;
-            PackageServiceProvider = this;
             Skills.Load();
             ActiveSkills.PruneMissing();
             Credentials.Load();
@@ -77,6 +79,27 @@ namespace VSAgent
                 AgentHost = null;
             }
             base.Dispose(disposing);
+        }
+
+        private static void ApplyLanguageFromPreferences()
+        {
+            try
+            {
+                var store = new WorkbenchStore();
+                var preferences = store.Preferences;
+                if (string.IsNullOrWhiteSpace(preferences.Language) ||
+                    string.Equals(preferences.Language, "Auto", StringComparison.OrdinalIgnoreCase))
+                {
+                    Localization.Language = Services.I18n.UiLanguage.Auto;
+                    return;
+                }
+                if (Enum.TryParse<Services.I18n.UiLanguage>(preferences.Language, true, out var parsed))
+                    Localization.Language = parsed;
+            }
+            catch
+            {
+                Localization.Language = Services.I18n.UiLanguage.Auto;
+            }
         }
     }
 }

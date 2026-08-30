@@ -180,8 +180,8 @@ namespace VSAgent.Views
             AddNavigationItem(list, "Context", "CX", "Inspectable prompt context");
             AddNavigationItem(list, "Prompts", "PR", "Reusable prompt library");
             AddNavigationItem(list, "Sessions", "SE", "Restore and export sessions");
+            AddNavigationItem(list, "Kanban", "KB", "Sequential task queue with agent profiles");
             AddNavigationItem(list, "Skills", "SK", "OMP skills");
-            AddNavigationItem(list, "Tools", "TL", "Custom MCP tools");
             AddNavigationItem(list, "Settings", "ST", "Provider and extension settings");
             AddNavigationItem(list, "Diagnostics", "DX", "Runtime and installation checks");
 
@@ -273,12 +273,11 @@ namespace VSAgent.Views
             AddTab(tabs, "Context", CreateContextPage());
             AddTab(tabs, "Prompts", CreatePromptsPage());
             AddTab(tabs, "Sessions", CreateSessionsPage());
+            AddTab(tabs, "Kanban", CreateKanbanPage());
 
             var skills = AddTab(tabs, "Skills", new SkillsPlaceholder());
             skills.Name = "SkillsTab";
             var tools = AddTab(tabs, "Tools", new ToolsPlaceholder());
-            tools.Name = "ToolsTab";
-            AddTab(tabs, "Diagnostics", CreateDiagnosticsPage());
 
             tabs.SelectedItem = ChatTab;
             return tabs;
@@ -421,8 +420,7 @@ namespace VSAgent.Views
 
             var root = new Grid();
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star), MinHeight = 75, MaxHeight = 210 });
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star), MinHeight = 90, MaxHeight = 320 });
 
             var attachments = new StackPanel { Orientation = Orientation.Horizontal };
             attachments.Children.Add(CompactButton("Selection", delegate { AttachSelectionToPrompt(); }, "Attach selected editor text"));
@@ -433,12 +431,16 @@ namespace VSAgent.Views
             attachments.Children.Add(hint);
             root.Children.Add(attachments);
 
-            PromptTextBox = WorkbenchUi.TextBox("Describe the task... (Ctrl+Enter to send, type / for commands, Esc to cancel)", true);
+            PromptTextBox = WorkbenchUi.TextBox("Describe the task... (Ctrl+Enter to send, type / for commands, Esc to cancel). Drop images or files here — paste with Ctrl+V.", true);
             PromptTextBox.Margin = new Thickness(0, 5, 0, 5);
             PromptTextBox.FontSize = 12;
             PromptTextBox.AcceptsTab = true;
-            PromptTextBox.ToolTip = "Describe the task. The context inspector shows additional data that will be prepended.";
-            Grid.SetRow(PromptTextBox, 1);
+            PromptTextBox.MaxLength = 0; // unlimited — long prompts must not be truncated
+            PromptTextBox.TextWrapping = TextWrapping.Wrap;
+            PromptTextBox.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+            PromptTextBox.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+            PromptTextBox.AllowDrop = true;
+            PromptTextBox.ToolTip = "Describe the task. The context inspector shows additional data that will be prepended. Paste images with Ctrl+V or drop files/images here.";
             root.Children.Add(PromptTextBox);
 
             var actionRow = new Grid();

@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <Compile Include="..\VSAgent\Models\ChatHistoryEntry.cs" Link="Models\ChatHistoryEntry.cs" />
+    <Compile Include="..\VSAgent\Models\KanbanCard.cs" Link="Models\KanbanCard.cs" />
     <Compile Include="..\VSAgent\Services\WorkbenchStore.cs" Link="Services\WorkbenchStore.cs" />
     <Compile Include="..\VSAgent\Services\GitCommandService.cs" Link="Services\GitCommandService.cs" />
   </ItemGroup>

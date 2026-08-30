@@ -21,21 +21,39 @@ namespace VSAgent.Services.Omp
             new ConcurrentDictionary<string, TaskCompletionSource<JToken>>();
         private readonly SemaphoreSlim writeLock = new SemaphoreSlim(1, 1);
         private readonly StringBuilder responseText = new StringBuilder();
+        private readonly object healthLock = new object();
         private Process process;
         private CancellationTokenSource lifetime;
         private Task readerTask;
         private Task stderrTask;
         private long nextId;
         private string sessionId;
+        private string agentVersion;
+        private string agentImplementation;
+        private bool disposed;
+        private DateTime startedAt;
 
         public event EventHandler<string> StatusChanged;
         public event EventHandler<string> TextReceived;
         public event EventHandler<AcpToolCall> ToolCallReceived;
+        public event EventHandler ConnectionLost;
 
         public bool AutoApproveReadOnly { get; set; } = true;
 
+        public string Version => agentVersion;
+        public string Implementation => agentImplementation;
+        public string CurrentSessionId => sessionId;
+        public DateTime StartedAt => startedAt;
+        public string LastError { get; private set; }
 
-        public bool IsRunning => process != null && !process.HasExited && !string.IsNullOrWhiteSpace(sessionId);
+        public bool IsRunning
+        {
+            get
+            {
+                try { return process != null && !process.HasExited && !string.IsNullOrWhiteSpace(sessionId); }
+                catch { return false; }
+            }
+        }
 
         public Task StartAsync(
             string executablePath,
@@ -81,43 +99,80 @@ namespace VSAgent.Services.Omp
             if (!string.IsNullOrWhiteSpace(modelName))
                 startInfo.Environment["OMP_MODEL"] = modelName;
             process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-            process.Exited += (_, __) => OnStatusChanged("oh-my-pi stopped.");
-            if (!process.Start()) throw new InvalidOperationException("Could not start oh-my-pi.");
+            process.Exited += Process_Exited;
+            try
+            {
+                if (!process.Start())
+                    throw new InvalidOperationException("Could not start oh-my-pi.");
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                throw;
+            }
 
+            startedAt = DateTime.UtcNow;
             readerTask = Task.Run(() => ReadLoopAsync(lifetime.Token), lifetime.Token);
             stderrTask = Task.Run(() => ReadErrorLoopAsync(lifetime.Token), lifetime.Token);
             OnStatusChanged("Initializing oh-my-pi ACP connection...");
 
-            await SendRequestAsync("initialize", new JObject
+            try
             {
-                ["protocolVersion"] = 1,
-                ["clientCapabilities"] = new JObject(),
-                ["clientInfo"] = new JObject
+                var initializeResponse = await SendRequestAsync("initialize", new JObject
                 {
-                    ["name"] = "Quantivus OMP for Visual Studio",
-                    ["version"] = "0.1.0"
-                }
-            }, cancellationToken).ConfigureAwait(false);
-
-            var sessionResponse = await SendRequestAsync("session/new", new JObject
-            {
-                ["cwd"] = startInfo.WorkingDirectory,
-                ["mcpServers"] = new JArray
-                {
-                    new JObject
+                    ["protocolVersion"] = 1,
+                    ["clientCapabilities"] = new JObject(),
+                    ["clientInfo"] = new JObject
                     {
-                        ["name"] = "visual-studio",
-                        ["command"] = mcpHostPath,
-                        ["args"] = new JArray("--pipe", pipeName)
+                        ["name"] = "Quantivus OMP for Visual Studio",
+                        ["version"] = "0.1.0"
                     }
-                }
-            }, cancellationToken).ConfigureAwait(false);
+                }, cancellationToken).ConfigureAwait(false);
 
-            sessionId = sessionResponse?["sessionId"]?.Value<string>();
-            if (string.IsNullOrWhiteSpace(sessionId))
-                throw new InvalidDataException("oh-my-pi did not return an ACP session ID.");
+                agentVersion = initializeResponse?["agentInfo"]?["version"]?.Value<string>();
+                agentImplementation = initializeResponse?["agentInfo"]?["name"]?.Value<string>()
+                    ?? initializeResponse?["serverInfo"]?["name"]?.Value<string>();
 
-            OnStatusChanged("oh-my-pi is connected to Visual Studio.");
+                var sessionResponse = await SendRequestAsync("session/new", new JObject
+                {
+                    ["cwd"] = startInfo.WorkingDirectory,
+                    ["mcpServers"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["name"] = "visual-studio",
+                            ["command"] = mcpHostPath,
+                            ["args"] = new JArray("--pipe", pipeName)
+                        }
+                    }
+                }, cancellationToken).ConfigureAwait(false);
+
+                sessionId = sessionResponse?["sessionId"]?.Value<string>();
+                if (string.IsNullOrWhiteSpace(sessionId))
+                    throw new InvalidDataException("oh-my-pi did not return an ACP session ID.");
+
+                LastError = null;
+                OnStatusChanged(FormatConnectedMessage());
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                try { StopAsync().GetAwaiter().GetResult(); } catch { /* swallow cleanup errors during startup */ }
+                throw;
+            }
+        }
+
+        private void Process_Exited(object sender, EventArgs e)
+        {
+            OnStatusChanged("oh-my-pi stopped.");
+            ConnectionLost?.Invoke(this, EventArgs.Empty);
+        }
+
+        private string FormatConnectedMessage()
+        {
+            if (!string.IsNullOrWhiteSpace(agentVersion))
+                return $"oh-my-pi {agentVersion} is connected to Visual Studio.";
+            return "oh-my-pi is connected to Visual Studio.";
         }
 
         public async Task<string> PromptAsync(string prompt, CancellationToken cancellationToken)
@@ -126,17 +181,32 @@ namespace VSAgent.Services.Omp
             lock (responseText) responseText.Clear();
 
             OnStatusChanged("oh-my-pi is working...");
-            await SendRequestAsync("session/prompt", new JObject
+            try
             {
-                ["sessionId"] = sessionId,
-                ["prompt"] = new JArray
+                await SendRequestAsync("session/prompt", new JObject
                 {
-                    new JObject { ["type"] = "text", ["text"] = prompt }
-                }
-            }, cancellationToken).ConfigureAwait(false);
+                    ["sessionId"] = sessionId,
+                    ["prompt"] = new JArray
+                    {
+                        new JObject { ["type"] = "text", ["text"] = prompt }
+                    }
+                }, cancellationToken).ConfigureAwait(false);
 
-            OnStatusChanged("oh-my-pi completed the request.");
-            lock (responseText) return responseText.ToString();
+                LastError = null;
+                OnStatusChanged("oh-my-pi completed the request.");
+                lock (responseText) return responseText.ToString();
+            }
+            catch (OperationCanceledException)
+            {
+                LastError = "cancelled";
+                throw;
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                OnStatusChanged("Prompt failed: " + ex.Message);
+                throw;
+            }
         }
 
         // Sends a follow-up message to the running session without canceling it.
@@ -165,8 +235,36 @@ namespace VSAgent.Services.Omp
             }
             catch (Exception ex)
             {
+                LastError = ex.Message;
                 OnStatusChanged("Steer failed: " + ex.Message);
                 throw;
+            }
+        }
+
+        public async Task EnsureHealthyAsync(CancellationToken cancellationToken)
+        {
+            if (IsRunning) return;
+            LastError = LastError ?? "oh-my-pi is not connected.";
+            OnStatusChanged("oh-my-pi is not connected. Retry StartAsync to reconnect.");
+            await Task.CompletedTask;
+        }
+
+        public async Task<bool> PingAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default)
+        {
+            if (!IsRunning) return false;
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
+            using (cancellationToken.Register(() => tcs.TrySetCanceled()))
+            {
+                try
+                {
+                    await SendRequestAsync("session/status", new JObject { ["sessionId"] = sessionId }, cancellationToken).ConfigureAwait(false);
+                    return true;
+                }
+                catch
+                {
+                    return false;
+                }
             }
         }
         public async Task StopAsync()
@@ -485,9 +583,22 @@ namespace VSAgent.Services.Omp
 
         public void Dispose()
         {
-            _ = StopAsync();
+            if (disposed) return;
+            disposed = true;
+
+            try
+            {
+                StopAsync().GetAwaiter().GetResult();
+            }
+            catch
+            {
+                // best-effort cleanup during disposal
+            }
+
             writeLock.Dispose();
             lifetime?.Dispose();
-        }
-    }
+
+}
+
+}
 }

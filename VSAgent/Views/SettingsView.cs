@@ -97,8 +97,8 @@ namespace VSAgent.Views
             subTabs.Items.Add(MakeTab("Models", BuildModelsTab()));
             subTabs.Items.Add(MakeTab("Authentication", BuildAuthTab()));
             subTabs.Items.Add(MakeTab("Web search", BuildSearchTab()));
-            subTabs.Items.Add(MakeTab("Context", BuildContextTab()));
             subTabs.Items.Add(MakeTab("Runtime", BuildRuntimeTab()));
+            subTabs.Items.Add(MakeTab("Language", BuildLanguageTab()));
 
             Content = subTabs;
         }
@@ -552,6 +552,59 @@ namespace VSAgent.Views
             Grid.SetRow(hint, 7);
             Grid.SetColumnSpan(hint, 2);
             grid.Children.Add(hint);
+
+            return grid;
+        }
+
+        private FrameworkElement BuildLanguageTab()
+        {
+            var grid = new Grid { Margin = new Thickness(16) };
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            grid.Children.Add(HeaderText("Language", 16, 0));
+
+            var intro = new TextBlock
+            {
+                Text = "Selects the language used for labels, status text and the DLLSpy tab. The change is saved to your workbench preferences.",
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 12)
+            };
+            intro.SetResourceReference(TextBlock.ForegroundProperty, VsBrushes.ToolWindowTextKey);
+            Grid.SetRow(intro, 1);
+            grid.Children.Add(intro);
+
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(180) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.Children.Add(SubLabel("UI language:", 2));
+            var languageCombo = new ComboBox { IsEditable = false, Margin = new Thickness(0, 4, 0, 4), MinWidth = 200 };
+            languageCombo.SetResourceReference(ComboBox.ForegroundProperty, VsBrushes.ToolWindowTextKey);
+            var available = VSAgent.Services.I18n.LocalizationService.Current.AvailableLanguages;
+            foreach (var lang in available)
+            {
+                languageCombo.Items.Add(VSAgent.Services.I18n.LocalizationService.Current.GetLanguageDisplayName(lang));
+            }
+            languageCombo.SelectedIndex = Math.Max(0, available.ToList().IndexOf(VSAgent.Services.I18n.LocalizationService.Current.Language));
+            languageCombo.SelectionChanged += (_, __) =>
+            {
+                if (languageCombo.SelectedIndex >= 0)
+                {
+                    var newLanguage = available.ElementAt(languageCombo.SelectedIndex);
+                    VSAgentPackage.Localization.Language = newLanguage;
+                    try
+                    {
+                        new WorkbenchStore().UpdatePreferences(prefs =>
+                        {
+                            prefs.Language = newLanguage.ToString();
+                        });
+                    }
+                    catch { }
+                    SettingsChanged?.Invoke(this, EventArgs.Empty);
+                }
+            };
+            Grid.SetRow(languageCombo, 2);
+            Grid.SetColumn(languageCombo, 1);
+            grid.Children.Add(languageCombo);
 
             return grid;
         }

@@ -11,7 +11,7 @@ REM ============================================================
 
 setlocal
 
-set "HASH=z2h5qxvq.dhx"
+set "HASH=yutx3rsu.l4b"
 set "GUID={41f0c0d8-5c2b-4f02-8c7e-0b3d3b6e1a2f}"
 set "VSID=18.0_719c975fExp"
 set "USERPROFILE_DIR=%USERPROFILE%"
