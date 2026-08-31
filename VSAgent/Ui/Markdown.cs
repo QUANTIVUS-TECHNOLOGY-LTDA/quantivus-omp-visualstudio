@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
@@ -10,217 +9,235 @@ using System.Windows.Media;
 namespace VSAgent.Ui
 {
     /// <summary>
-    /// Minimal markdown-to-FlowDocument converter. Supports:
-    ///   - # / ## / ### headers
-    ///   - fenced ``` code blocks
-    ///   - **bold**, *italic*, `inline code`
-    ///   - unordered lists (- or *), ordered lists (1. 2. ...)
-    ///   - paragraph breaks
-    /// No external dependency. Result is a FlowDocument that renders inside
-    /// a FlowDocumentScrollViewer / RichTextBox.
+    /// Minimal markdown-to-FlowDocument converter with Visual Studio
+    /// theme-aware text and code surfaces.
     /// </summary>
     public static class Markdown
     {
         public static FlowDocument Parse(string text)
         {
-            var doc = new FlowDocument
+            var document = new FlowDocument
             {
                 FontFamily = new FontFamily("Segoe UI"),
                 FontSize = 13,
                 PagePadding = new Thickness(0),
                 ColumnWidth = double.PositiveInfinity,
-                Background = Brushes.Transparent,
-                Foreground = Brushes.White
+                Background = Brushes.Transparent
             };
-            if (string.IsNullOrEmpty(text)) return doc;
+            document.SetResourceReference(FlowDocument.ForegroundProperty, VsTheme.ForegroundKey);
+            if (string.IsNullOrEmpty(text)) return document;
 
             var lines = text.Replace("\r\n", "\n").Split('\n');
-            int i = 0;
-            while (i < lines.Length)
+            var index = 0;
+            while (index < lines.Length)
             {
-                var line = lines[i];
+                var line = lines[index];
                 if (string.IsNullOrWhiteSpace(line))
                 {
-                    i++;
+                    index++;
                     continue;
                 }
 
-                // fenced code block
                 if (line.StartsWith("```", StringComparison.Ordinal))
                 {
-                    var lang = line.Substring(3).Trim();
+                    var language = line.Substring(3).Trim();
                     var body = new List<string>();
-                    i++;
-                    while (i < lines.Length && !lines[i].StartsWith("```", StringComparison.Ordinal))
+                    index++;
+                    while (index < lines.Length && !lines[index].StartsWith("```", StringComparison.Ordinal))
                     {
-                        body.Add(lines[i]);
-                        i++;
+                        body.Add(lines[index]);
+                        index++;
                     }
-                    if (i < lines.Length) i++; // skip closing ```
-                    doc.Blocks.Add(CodeBlock(string.Join("\n", body), lang));
+
+                    if (index < lines.Length) index++;
+                    document.Blocks.Add(CodeBlock(string.Join("\n", body), language));
                     continue;
                 }
 
-                // heading
                 if (line.StartsWith("#", StringComparison.Ordinal))
                 {
-                    int level = 0;
+                    var level = 0;
                     while (level < line.Length && line[level] == '#') level++;
                     if (level > 6) level = 6;
-                    var content = line.Substring(level).Trim();
-                    doc.Blocks.Add(Heading(level, content));
-                    i++;
+                    document.Blocks.Add(Heading(level, line.Substring(level).Trim()));
+                    index++;
                     continue;
                 }
 
-                // unordered list
                 if (line.StartsWith("- ", StringComparison.Ordinal) ||
                     line.StartsWith("* ", StringComparison.Ordinal))
                 {
                     var list = new List();
-                    while (i < lines.Length && (lines[i].StartsWith("- ", StringComparison.Ordinal) || lines[i].StartsWith("* ", StringComparison.Ordinal)))
+                    while (index < lines.Length &&
+                           (lines[index].StartsWith("- ", StringComparison.Ordinal) ||
+                            lines[index].StartsWith("* ", StringComparison.Ordinal)))
                     {
-                        var item = lines[i].Substring(2).Trim();
-                        list.ListItems.Add(new ListItem(BuildParagraph(item, new Thickness(0))));
-                        i++;
+                        var paragraph = new Paragraph(new Run(lines[index].Substring(2).Trim()))
+                        {
+                            Margin = new Thickness(0)
+                        };
+                        ReplaceInlines(paragraph);
+                        list.ListItems.Add(new ListItem(paragraph));
+                        index++;
                     }
-                    doc.Blocks.Add(list);
+
+                    document.Blocks.Add(list);
                     continue;
                 }
 
-                // ordered list
                 if (Regex.IsMatch(line, @"^\d+\.\s"))
                 {
                     var list = new List { MarkerStyle = TextMarkerStyle.Decimal };
-                    while (i < lines.Length && Regex.IsMatch(lines[i], @"^\d+\.\s"))
+                    while (index < lines.Length && Regex.IsMatch(lines[index], @"^\d+\.\s"))
                     {
-                        var item = Regex.Replace(lines[i], @"^\d+\.\s", "");
-                        list.ListItems.Add(new ListItem(BuildParagraph(item, new Thickness(0))));
-                        i++;
+                        var paragraph = new Paragraph(new Run(Regex.Replace(lines[index], @"^\d+\.\s", string.Empty)))
+                        {
+                            Margin = new Thickness(0)
+                        };
+                        ReplaceInlines(paragraph);
+                        list.ListItems.Add(new ListItem(paragraph));
+                        index++;
                     }
-                    doc.Blocks.Add(list);
+
+                    document.Blocks.Add(list);
                     continue;
                 }
 
-                // paragraph (consume until blank line)
-                var buf = new StringBuilder(line);
-                i++;
-                while (i < lines.Length && !string.IsNullOrWhiteSpace(lines[i]) &&
-                       !lines[i].StartsWith("#", StringComparison.Ordinal) &&
-                       !lines[i].StartsWith("```", StringComparison.Ordinal) &&
-                       !lines[i].StartsWith("- ", StringComparison.Ordinal) &&
-                       !lines[i].StartsWith("* ", StringComparison.Ordinal) &&
-                       !Regex.IsMatch(lines[i], @"^\d+\.\s"))
+                var textParagraph = new Paragraph { Margin = new Thickness(0, 0, 0, 8) };
+                textParagraph.Inlines.Add(new Run(line));
+                index++;
+                while (index < lines.Length &&
+                       !string.IsNullOrWhiteSpace(lines[index]) &&
+                       !lines[index].StartsWith("#", StringComparison.Ordinal) &&
+                       !lines[index].StartsWith("```", StringComparison.Ordinal) &&
+                       !lines[index].StartsWith("- ", StringComparison.Ordinal) &&
+                       !lines[index].StartsWith("* ", StringComparison.Ordinal) &&
+                       !Regex.IsMatch(lines[index], @"^\d+\.\s"))
                 {
-                    buf.Append(' ').Append(lines[i]);
-                    i++;
+                    textParagraph.Inlines.Add(new Run(" " + lines[index]));
+                    index++;
                 }
-                doc.Blocks.Add(BuildParagraph(buf.ToString(), new Thickness(0, 0, 0, 8)));
+
+                ReplaceInlines(textParagraph);
+                document.Blocks.Add(textParagraph);
             }
-            return doc;
+
+            return document;
         }
 
         private static Paragraph Heading(int level, string text)
         {
-            double size = level switch { 1 => 20, 2 => 17, _ => 14 };
-            var p = BuildParagraph(text, new Thickness(0, 8, 0, 4));
-            p.FontWeight = FontWeights.Bold;
-            p.FontSize = size;
-            return p;
+            var size = level switch { 1 => 20, 2 => 17, _ => 14 };
+            var paragraph = new Paragraph(new Run(text))
+            {
+                FontWeight = FontWeights.Bold,
+                FontSize = size,
+                Margin = new Thickness(0, 8, 0, 4)
+            };
+            ReplaceInlines(paragraph);
+            return paragraph;
         }
 
-        private static Block CodeBlock(string code, string lang)
+        private static Block CodeBlock(string code, string language)
         {
             var border = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(0x14, 0x14, 0x18)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(0x40, 0x40, 0x45)),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(4),
                 Padding = new Thickness(8, 6, 8, 6),
-                Margin = new Thickness(0, 0, 0, 8)
+                Margin = new Thickness(0, 0, 0, 8),
+                SnapsToDevicePixels = true,
+                UseLayoutRounding = true,
+                ToolTip = string.IsNullOrWhiteSpace(language) ? null : language
             };
-            var tb = new TextBlock
+            border.SetResourceReference(Border.BackgroundProperty, VsTheme.BackgroundKey);
+            border.SetResourceReference(Border.BorderBrushProperty, VsTheme.BorderKey);
+
+            var text = new TextBlock
             {
                 Text = code,
                 FontFamily = new FontFamily("Consolas"),
                 FontSize = 12,
-                Foreground = new SolidColorBrush(Color.FromRgb(0xCF, 0xCF, 0xCF)),
                 TextWrapping = TextWrapping.Wrap
             };
-            border.Child = tb;
-            var container = new BlockUIContainer(border) { Margin = new Thickness(0) };
-            return container;
+            text.SetResourceReference(TextBlock.ForegroundProperty, VsTheme.ForegroundKey);
+            border.Child = text;
+            return new BlockUIContainer(border) { Margin = new Thickness(0) };
         }
 
-        private static Paragraph BuildParagraph(string text, Thickness margin)
+        private static void ReplaceInlines(Paragraph paragraph)
         {
-            var p = new Paragraph { Margin = margin };
-            AddInlineRuns(p, text ?? string.Empty);
-            return p;
-        }
+            var text = paragraph.Inlines.ToString();
+            if (string.IsNullOrEmpty(text)) return;
 
-        private static void AddInlineRuns(Paragraph p, string text)
-        {
-            int idx = 0;
-            while (idx < text.Length)
+            paragraph.Inlines.Clear();
+            var index = 0;
+            while (index < text.Length)
             {
-                // inline code `x`
-                if (text[idx] == '`')
+                if (text[index] == '`')
                 {
-                    int end = text.IndexOf('`', idx + 1);
-                    if (end > idx)
+                    var end = text.IndexOf('`', index + 1);
+                    if (end > index)
                     {
-                        var content = text.Substring(idx + 1, end - idx - 1);
-                        p.Inlines.Add(InlineCode(content));
-                        idx = end + 1;
+                        paragraph.Inlines.Add(InlineCode(text.Substring(index + 1, end - index - 1)));
+                        index = end + 1;
                         continue;
                     }
                 }
-                // bold **x**
-                if (idx + 1 < text.Length && text[idx] == '*' && text[idx + 1] == '*')
+
+                if (index + 1 < text.Length && text[index] == '*' && text[index + 1] == '*')
                 {
-                    int end = text.IndexOf("**", idx + 2, StringComparison.Ordinal);
-                    if (end > idx + 1)
+                    var end = text.IndexOf("**", index + 2, StringComparison.Ordinal);
+                    if (end > index + 1)
                     {
-                        var content = text.Substring(idx + 2, end - idx - 2);
-                        p.Inlines.Add(new Run(content) { FontWeight = FontWeights.Bold });
-                        idx = end + 2;
+                        paragraph.Inlines.Add(new Run(text.Substring(index + 2, end - index - 2))
+                        {
+                            FontWeight = FontWeights.Bold
+                        });
+                        index = end + 2;
                         continue;
                     }
                 }
-                // italic *x*
-                if (text[idx] == '*')
+
+                if (text[index] == '*')
                 {
-                    int end = text.IndexOf('*', idx + 1);
-                    if (end > idx)
+                    var end = text.IndexOf('*', index + 1);
+                    if (end > index)
                     {
-                        var content = text.Substring(idx + 1, end - idx - 1);
-                        p.Inlines.Add(new Run(content) { FontStyle = FontStyles.Italic });
-                        idx = end + 1;
+                        paragraph.Inlines.Add(new Run(text.Substring(index + 1, end - index - 1))
+                        {
+                            FontStyle = FontStyles.Italic
+                        });
+                        index = end + 1;
                         continue;
                     }
                 }
-                // accumulate up to next marker
-                int next = text.Length;
-                for (int k = idx + 1; k < text.Length; k++)
+
+                var next = text.Length;
+                for (var candidate = index + 1; candidate < text.Length; candidate++)
                 {
-                    if (text[k] == '`' || text[k] == '*') { next = k; break; }
+                    if (text[candidate] == '`' || text[candidate] == '*')
+                    {
+                        next = candidate;
+                        break;
+                    }
                 }
-                p.Inlines.Add(new Run(text.Substring(idx, next - idx)));
-                idx = next;
+
+                paragraph.Inlines.Add(new Run(text.Substring(index, next - index)));
+                index = next;
             }
         }
 
         private static Inline InlineCode(string content)
         {
-            var r = new Run(content)
+            var run = new Run(content)
             {
                 FontFamily = new FontFamily("Consolas"),
-                Background = new SolidColorBrush(Color.FromRgb(0x2A, 0x2A, 0x30)),
-                Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xC4, 0x7A))
+                FontWeight = FontWeights.SemiBold
             };
-            return r;
+            run.SetResourceReference(TextElement.BackgroundProperty, VsTheme.AccentPaleKey);
+            run.SetResourceReference(TextElement.ForegroundProperty, VsTheme.ForegroundKey);
+            return run;
         }
     }
 }
